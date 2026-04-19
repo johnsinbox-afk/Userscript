@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Listing Collector</title>
+    <link rel="stylesheet" href="ui.css">
+    <style>
+        body{min-width:260px;padding:12px}
+        h1{font-size:14px;margin:0 0 8px}
+        .line{margin:6px 0;font-size:13px}
+        .line b{color:var(--accent)}
+        .actions{display:flex;gap:8px;margin-top:8px}
+        .actions button{flex:1 1 auto}
+    </style>
+</head>
+<body>
+    <h1>Listing Collector</h1>
+    <div id="state" class="line muted">Loading…</div>
+    <div id="target" class="line"></div>
+    <div class="actions">
+        <button id="options" class="primary">Settings</button>
+        <button id="signout" class="danger" hidden>Sign out</button>
+    </div>
+<script src="popup.js"></script>
+</body>
+</html>
