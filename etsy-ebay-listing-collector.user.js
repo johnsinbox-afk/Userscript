@@ -28,6 +28,10 @@
 // @connect      googleusercontent.com
 // @connect      www.ebay.com
 // @connect      ebay.com
+// @connect      m.ebay.com
+// @connect      www.etsy.com
+// @connect      etsy.com
+// @connect      i.etsystatic.com
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -92,8 +96,11 @@
         WEB_APP_URL:     'PUT_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE',
         SHARED_SECRET:   '',                 // optional
         OPEN_PANEL_BY_DEFAULT: false,        // auto-open the overlay on load
-        PREFETCH_QTY_ON_SAVE: false,         // eBay search: pull Available/Sold from each item page before saving (slow)
-        COPY_TABLE_ROW_HEIGHT_PX: 210        // height used for Copy Table rows so images render nicely in Sheets
+        COPY_TABLE_ROW_HEIGHT_PX: 210,       // height used for Copy Table rows so images render nicely in Sheets
+        ENRICH_CONCURRENCY: 3,               // max parallel item-page fetches
+        // Default state of the "Enrich before save" toggle in the panel.
+        // You can flip this in the panel at any time; this is just the start-up value.
+        ENRICH_BEFORE_SAVE_DEFAULT: false
     };
 
     // ────────────────────────────────────────────────────────────────────────
@@ -448,9 +455,25 @@
         return '';
     }
     function getEbaySearchCountry(card) {
-        const el = Array.from(card.querySelectorAll('.su-card-container__attributes__primary .s-card__attribute-row span.su-styled-text.secondary.large'))
+        // Desktop eBay markup
+        let el = Array.from(card.querySelectorAll('.su-card-container__attributes__primary .s-card__attribute-row span.su-styled-text.secondary.large'))
             .find(s => /Located in/i.test(s.textContent || ''));
-        return el ? textOf(el).replace(/^Located in\s*/i, '').trim() : '';
+        if (el) return textOf(el).replace(/^Located in\s*/i, '').trim();
+        // Mobile / alternate markup: any span or div in the card containing "Located in …"
+        const containers = [card, card.closest('li.s-item'), card.closest('li.s-card')].filter(Boolean);
+        for (const c of containers) {
+            const alt = Array.from(c.querySelectorAll('span, div, p'))
+                .find(n => /Located in\s+/i.test((n.textContent || '').replace(/\s+/g, ' ').trim()) &&
+                           !n.querySelector('span, div, p'));
+            if (alt) {
+                const m = (alt.textContent || '').match(/Located in\s+([^.\n]+?)(?:\s{2,}|$)/i);
+                if (m) return m[1].trim();
+            }
+            // "from <country>" on the s-item__location element
+            const loc = c.querySelector && c.querySelector('.s-item__location, .s-item__itemLocation');
+            if (loc) return textOf(loc).replace(/^from\s+/i, '').trim();
+        }
+        return '';
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -538,7 +561,13 @@
             owner: tip.owner, accountAge: tip.accountAge, totalSales: tip.totalSales,
             itemNumber, country,
             avgPrice:'', avgShipping:'', totalSold:'', sales:'', lastSold:'',
-            available:'', sold:''
+            available:'', sold:'',
+            // Enrichment (filled by enrichOne when "Enrich" is pressed or
+            // "Enrich before save" is ticked):
+            shopSales:'', shopRating:'', shopReviews:'', shopAdmirers:'',
+            favorites:'', tags:'', materials:'', shopLocation:'',
+            condition:'', handlingTime:'', returns:'',
+            sellerFeedbackScore:'', sellerPositivePct:''
         };
     }
     function extractEbaySearch(card) {
@@ -573,7 +602,11 @@
             owner:'', accountAge:'', totalSales:'',
             itemNumber, country,
             avgPrice:'', avgShipping:'', totalSold:'', sales:'', lastSold:'',
-            available:'', sold:''
+            available:'', sold:'',
+            shopSales:'', shopRating:'', shopReviews:'', shopAdmirers:'',
+            favorites:'', tags:'', materials:'', shopLocation:'',
+            condition:'', handlingTime:'', returns:'',
+            sellerFeedbackScore:'', sellerPositivePct:''
         };
     }
     function extractEbayStore(card) {
@@ -595,7 +628,11 @@
             owner:'', accountAge:'', totalSales:'',
             itemNumber, country:'',
             avgPrice:'', avgShipping:'', totalSold:'', sales:'', lastSold:'',
-            available:'', sold:''
+            available:'', sold:'',
+            shopSales:'', shopRating:'', shopReviews:'', shopAdmirers:'',
+            favorites:'', tags:'', materials:'', shopLocation:'',
+            condition:'', handlingTime:'', returns:'',
+            sellerFeedbackScore:'', sellerPositivePct:''
         };
     }
     function extractEbayResearch(row) {
@@ -629,7 +666,11 @@
             owner:'', accountAge:'', totalSales:'',
             itemNumber, country:'',
             avgPrice, avgShipping, totalSold, sales, lastSold,
-            available:'', sold:''
+            available:'', sold:'',
+            shopSales:'', shopRating:'', shopReviews:'', shopAdmirers:'',
+            favorites:'', tags:'', materials:'', shopLocation:'',
+            condition:'', handlingTime:'', returns:'',
+            sellerFeedbackScore:'', sellerPositivePct:''
         };
     }
     function extract(card) {
@@ -773,6 +814,12 @@
     const copyIdsBtn   = h('button', { class: 'warn'    }, isEtsy ? 'Copy Listing IDs' : 'Copy Item Numbers');
     const copySellerBtn= h('button', { class: 'success' }, 'Copy Seller+Item');
     const copyUrlsBtn  = h('button', { class: 'violet'  }, 'Copy URLs');
+    const enrichBtn    = h('button', { class: 'violet'  }, 'Enrich now');
+    const enrichToggle = h('input',  { type: 'checkbox', id: 'uec-enrich-chk' });
+    enrichToggle.checked = !!CONFIG.ENRICH_BEFORE_SAVE_DEFAULT;
+    const enrichLbl    = h('label', { for: 'uec-enrich-chk', style: 'font-size:12px;color:#333;display:flex;align-items:center;gap:6px;flex:1 1 auto;' },
+        enrichToggle, 'Enrich before save (opens each item/shop page in background)'
+    );
     const saveBtn      = h('button', { class: 'primary' }, 'Save Selected to Google Sheets');
 
     const modeLabel =
@@ -797,6 +844,8 @@
             h('div', { class: 'uec-row' }, selectAllBtn, clearBtn),
             h('div', { class: 'uec-row' }, copyTableBtn, copyIdsBtn),
             h('div', { class: 'uec-row' }, copySellerBtn, copyUrlsBtn),
+            h('div', { class: 'uec-row' }, enrichBtn),
+            h('div', { class: 'uec-row' }, enrichLbl),
             h('div', { class: 'uec-row' }, saveBtn),
             statusEl, logEl
         )
@@ -1114,49 +1163,90 @@
         const imgHtml = f.image ? `<img src="${f.image}" width="100" style="max-height:190px;object-fit:contain;">` : '[No Image]';
         return { titleClean, imgHtml };
     }
+    // Column definitions per mode. Each entry is [header, accessor(f) → cellValue-or-imgHtml].
+    // Enrichment-derived fields (favorites, shopSales, condition, …) are included.
+    function columnsForMode() {
+        const imgFor = f => cellsForRow(f).imgHtml;
+        const today  = () => new Date().toLocaleDateString('en-US');
+        switch (MODE) {
+            case 'ebay-research': return [
+                ['Seller',       f => f.seller],
+                ['Item #',       f => f.itemNumber],
+                ['Title',        f => cellsForRow(f).titleClean],
+                ['URL',          f => f.url],
+                ['Avg Price',    f => f.avgPrice],
+                ['Avg Shipping', f => f.avgShipping],
+                ['Total Sold',   f => f.totalSold],
+                ['Sales',        f => f.sales],
+                ['Last Sold',    f => f.lastSold],
+                ['Condition',    f => f.condition],
+                ['Feedback',     f => f.sellerFeedbackScore],
+                ['Positive %',   f => f.sellerPositivePct],
+                ['Image',        f => imgFor(f)]
+            ];
+            case 'ebay-search':
+            case 'ebay-store': return [
+                ['Seller',       f => f.seller],
+                ['Feedback',     f => f.sellerFeedbackScore],
+                ['Positive %',   f => f.sellerPositivePct],
+                ['Item #',       f => f.itemNumber],
+                ['Title',        f => cellsForRow(f).titleClean],
+                ['URL',          f => f.url],
+                ['Price',        f => f.price],
+                ['Available',    f => f.available],
+                ['Sold',         f => f.sold],
+                ['Condition',    f => f.condition],
+                ['Handling',     f => f.handlingTime],
+                ['Returns',      f => f.returns],
+                ['Ships From',   f => f.country],
+                ['Image',        f => imgFor(f)],
+                ['Date',         f => today()]
+            ];
+            case 'etsy-search':
+            default: return [
+                ['Seller',        f => f.seller],
+                ['Owner',         f => f.owner],
+                ['Account Age',   f => f.accountAge],
+                ['Shop Sales',    f => f.shopSales || f.totalSales],
+                ['Shop Rating',   f => f.shopRating],
+                ['Reviews',       f => f.shopReviews],
+                ['Admirers',      f => f.shopAdmirers],
+                ['Shop Location', f => f.shopLocation],
+                ['Listing #',     f => f.itemNumber],
+                ['Title',         f => cellsForRow(f).titleClean],
+                ['URL',           f => f.url],
+                ['Price',         f => f.price],
+                ['Favorites',     f => f.favorites],
+                ['Tags',          f => f.tags],
+                ['Materials',     f => f.materials],
+                ['Ships From',    f => f.country],
+                ['Image',         f => imgFor(f)],
+                ['Date',          f => today()]
+            ];
+        }
+    }
     copyTableBtn.addEventListener('click', () => {
         const rows = uniqueBy(selectedRowsAllPages(), r => r.itemNumber || r.url || '');
         if (!rows.length) return setStatus('No items selected.');
         const H = CONFIG.COPY_TABLE_ROW_HEIGHT_PX;
-        const isResearch = MODE === 'ebay-research';
-        const headers = isResearch
-            ? ['Seller','Item #','Title','URL','Avg Price','Avg Shipping','Total Sold','Sales','Last Sold','Image']
-            : ['Seller','Owner','Account Age','Total Sold','Item #','Title','URL','Price','Image','Ships From','Date Captured'];
+        const cols = columnsForMode();
         let html = '<table border="1" style="border-collapse:collapse;table-layout:fixed;width:100%;font-family:Arial;font-size:12px;">';
-        html += '<tr>' + headers.map(x => `<th style="padding:5px;font-weight:bold;">${x}</th>`).join('') + '</tr>';
+        html += '<tr>' + cols.map(c => `<th style="padding:5px;font-weight:bold;">${c[0]}</th>`).join('') + '</tr>';
         rows.forEach(f => {
-            const { titleClean, imgHtml } = cellsForRow(f);
-            if (isResearch) {
-                html += `<tr height="${H}" style="height:${H}px;">` +
-                    `<td style="padding:5px;vertical-align:top;">${f.seller || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.itemNumber || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${titleClean}</td>` +
-                    `<td style="padding:5px;vertical-align:top;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" nowrap>${f.url || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.avgPrice || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.avgShipping || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.totalSold || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.sales || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.lastSold || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${imgHtml}</td>` +
-                    `</tr>`;
-            } else {
-                html += `<tr height="${H}" style="height:${H}px;">` +
-                    `<td style="padding:5px;vertical-align:top;">${f.seller || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.owner || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.accountAge || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.totalSales || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.itemNumber || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${titleClean}</td>` +
-                    `<td style="padding:5px;vertical-align:top;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" nowrap>${f.url || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.price || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${imgHtml}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${f.country || ''}</td>` +
-                    `<td style="padding:5px;vertical-align:top;">${new Date().toLocaleDateString('en-US')}</td>` +
-                    `</tr>`;
-            }
+            html += `<tr height="${H}" style="height:${H}px;">` +
+                cols.map(([hdr, fn]) => {
+                    const v = fn(f);
+                    // The Image column already renders an <img> tag; everything else is text.
+                    const style = hdr === 'URL'
+                        ? 'padding:5px;vertical-align:top;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
+                        : 'padding:5px;vertical-align:top;';
+                    const val = v == null ? '' : v;
+                    return `<td style="${style}"${hdr === 'URL' ? ' nowrap' : ''}>${val}</td>`;
+                }).join('') + '</tr>';
         });
         html += '</table>';
-        copyHtml(html, `Copied ${rows.length} item(s) to clipboard as an HTML table (paste into Google Sheets / Excel / Word).`);
+        const enrichedCount = rows.filter(r => r.__enriched).length;
+        copyHtml(html, `Copied ${rows.length} item(s) (${enrichedCount} enriched).`);
     });
     copyIdsBtn.addEventListener('click', () => {
         const ids = Array.from(new Set(selectedRowsAllPages().map(r => r.itemNumber).filter(Boolean)));
@@ -1183,13 +1273,42 @@
             .then(() => setStatus(`Copied ${urls.length} URL(s).`))
             .catch(() => setStatus('Copy failed.'));
     });
+    enrichBtn.addEventListener('click', async () => {
+        const items = uniqueBy(selectedRowsAllPages(), r => r.itemNumber || r.url || '');
+        if (!items.length) { setStatus('Nothing selected to enrich.'); return; }
+        enrichBtn.disabled = true;
+        setStatus(`Enriching ${items.length} selection(s)\u2026`);
+        log(`Enriching ${items.length} selection(s).`);
+        const started = Date.now();
+        await enrichMany(items, (done, total, it) => {
+            setStatus(`Enriched ${done}/${total}: ${trunc(it.title)}`);
+        });
+        const secs = ((Date.now() - started) / 1000).toFixed(1);
+        setStatus(`Done. Enriched ${items.length} in ${secs}s. Extras will appear in Copy Table and Save.`);
+        log(`Enrichment finished in ${secs}s.`, 'ok');
+        enrichBtn.disabled = false;
+    });
 
     // ────────────────────────────────────────────────────────────────────────
-    //  eBay search: optional Available / Sold pre-fetch (concurrency 3)
+    //  Enrichment engine
+    //  ---------------------------------------------------------------------
+    //  Given a selection, opens the corresponding detail page(s) in the
+    //  background (via GM_xmlhttpRequest — no new tabs, no user-visible
+    //  navigation) and parses extra fields out of the HTML:
+    //
+    //    eBay item page  → condition, handling time, returns, available,
+    //                      sold, seller feedback score & positive %
+    //    Etsy listing    → favorites, tags, materials, country/ships-from
+    //    Etsy shop page  → shopSales, shopRating, shopReviews, shopAdmirers,
+    //                      shopLocation (fetched at most once per shop)
+    //
+    //  Results are merged back into the selection cache so they appear in
+    //  Copy Table and in the Google Sheet when you Save.
     // ────────────────────────────────────────────────────────────────────────
     function mapLimit(arr, limit, worker) {
         return new Promise(resolve => {
             const out = new Array(arr.length); let i = 0, active = 0, done = 0;
+            if (!arr.length) return resolve(out);
             const next = () => {
                 while (active < limit && i < arr.length) {
                     const idx = i++; active++;
@@ -1199,32 +1318,185 @@
                         .finally(() => { active--; done++; if (done === arr.length) resolve(out); else next(); });
                 }
             };
-            if (!arr.length) resolve(out); else next();
+            next();
         });
     }
-    function fetchQtyForItem(url, itemNumber) {
-        const target = url || (itemNumber ? 'https://www.ebay.com/itm/' + itemNumber : '');
-        if (!target || !gmXHR) return Promise.resolve({ available: '', sold: '' });
+    function fetchDoc(url) {
         return new Promise(resolve => {
+            if (!url || !gmXHR) return resolve(null);
             gmXHR({
-                method: 'GET', url: target, timeout: 20000,
+                method: 'GET', url, timeout: 25000,
+                headers: { 'Accept': 'text/html,application/xhtml+xml' },
                 onload: r => {
-                    try {
-                        const doc = new DOMParser().parseFromString(r.responseText || '', 'text/html');
-                        const el = doc.querySelector('#qtyAvailability, .x-quantity__availability, [data-testid="qtyAvailability"]');
-                        if (!el) return resolve({ available: '', sold: '' });
-                        const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
-                        let available = '', sold = '';
-                        let m = t.match(/([\d,]+)\s+available/i); if (m) available = m[1].replace(/,/g, '');
-                        m = t.match(/([\d,]+)\s+sold/i);           if (m) sold      = m[1].replace(/,/g, '');
-                        if (!available && /last\s+one/i.test(t)) available = '1';
-                        resolve({ available, sold });
-                    } catch (e) { resolve({ available: '', sold: '' }); }
+                    try { resolve(new DOMParser().parseFromString(r.responseText || '', 'text/html')); }
+                    catch (e) { resolve(null); }
                 },
-                onerror:   () => resolve({ available: '', sold: '' }),
-                ontimeout: () => resolve({ available: '', sold: '' })
+                onerror: () => resolve(null),
+                ontimeout: () => resolve(null)
             });
         });
+    }
+
+    // --- eBay item page ---------------------------------------------------
+    function parseEbayItemPage(doc) {
+        const out = { available: '', sold: '', condition: '', handlingTime: '', returns: '',
+                      sellerFeedbackScore: '', sellerPositivePct: '' };
+        if (!doc) return out;
+        // Available / Sold
+        const qtyEl = doc.querySelector('#qtyAvailability, .x-quantity__availability, [data-testid="qtyAvailability"], .d-quantity__availability');
+        if (qtyEl) {
+            const t = (qtyEl.textContent || '').replace(/\s+/g, ' ').trim();
+            let m = t.match(/([\d,]+)\s+available/i); if (m) out.available = m[1].replace(/,/g, '');
+            m = t.match(/More than\s+([\d,]+)\s+available/i); if (m) out.available = m[1].replace(/,/g, '') + '+';
+            m = t.match(/([\d,]+)\s+sold/i);           if (m) out.sold      = m[1].replace(/,/g, '');
+            if (!out.available && /last\s+one/i.test(t)) out.available = '1';
+        }
+        if (!out.sold) {
+            const alt = doc.querySelector('.x-quantity__availability--purchases, .w-quantity__purchases, a[href*="bidHistory"]');
+            if (alt) {
+                const m = (alt.textContent || '').match(/([\d,]+)/);
+                if (m) out.sold = m[1].replace(/,/g, '');
+            }
+        }
+        // Condition
+        const condEl = doc.querySelector('.x-item-condition-text, .d-item-condition-text, .ux-labels-values__values .ux-textspans, [data-testid="ux-item-condition"]');
+        if (condEl) {
+            const t = textOf(condEl).split('.')[0].trim();
+            if (t && t.length < 120) out.condition = t;
+        }
+        // Handling time / ships within
+        const shipBlock = doc.querySelector('.d-shipping-minview, .ux-layout-section__row .ux-labels-values--shipping, .vi-shipping');
+        if (shipBlock) {
+            const t = textOf(shipBlock);
+            const m = t.match(/dispatched within\s+([^.]+)/i) || t.match(/handling time\s*[:-]?\s*([^.]+)/i);
+            if (m) out.handlingTime = m[1].trim().slice(0, 80);
+        }
+        // Returns policy
+        const retBlock = doc.querySelector('.ux-layout-section__row .ux-labels-values--returns, .d-returns, [data-testid="returns"]');
+        if (retBlock) {
+            const t = textOf(retBlock).replace(/\s+/g, ' ').trim();
+            out.returns = t.length > 160 ? t.slice(0, 157) + '\u2026' : t;
+        }
+        // Seller info block
+        const sellerSec = doc.querySelector('.x-sellercard-atf, .ux-seller-section, [data-testid="x-sellercard-atf"]');
+        if (sellerSec) {
+            const t = textOf(sellerSec);
+            const score = t.match(/\(([\d,]+)\s*(?:feedback|ratings|reviews)?\)/i) || t.match(/([\d,]+)\s*feedback/i);
+            if (score) out.sellerFeedbackScore = score[1].replace(/,/g, '');
+            const pct = t.match(/([\d]{1,3}(?:\.\d)?)\s*%\s*positive/i);
+            if (pct) out.sellerPositivePct = pct[1];
+        }
+        return out;
+    }
+
+    // --- Etsy listing page -----------------------------------------------
+    function parseEtsyListingPage(doc) {
+        const out = { favorites: '', tags: '', materials: '', country: '' };
+        if (!doc) return out;
+        // Favorites — shown as "N people have this in their cart" or on the "♥ N favorites" button
+        const favBtn = doc.querySelector('button[data-favorites-count], [data-favorites-count]');
+        if (favBtn) {
+            out.favorites = (favBtn.getAttribute('data-favorites-count') || '').trim();
+        }
+        if (!out.favorites) {
+            const likesText = Array.from(doc.querySelectorAll('span, a, button'))
+                .map(n => textOf(n))
+                .find(t => /^\d[\d,]*\s+favorites?$/i.test(t));
+            if (likesText) out.favorites = (likesText.match(/\d[\d,]*/) || [''])[0].replace(/,/g, '');
+        }
+        // Tags (from the "Explore related searches" or tag list)
+        const tagNodes = doc.querySelectorAll('a[href*="/market/"], a[href*="/search?q="][data-tag]');
+        if (tagNodes.length) {
+            const tags = Array.from(tagNodes).map(a => textOf(a)).filter(Boolean);
+            out.tags = Array.from(new Set(tags)).slice(0, 20).join(', ');
+        }
+        // Materials & ships-from via the listing overview list items
+        Array.from(doc.querySelectorAll('li, p, div')).forEach(li => {
+            const t = textOf(li);
+            if (!out.materials && /^Materials?:\s+/i.test(t))   out.materials = t.replace(/^Materials?:\s+/i, '').slice(0, 200);
+            if (!out.country   && /^Ships from:?\s+/i.test(t))  out.country   = t.replace(/^Ships from:?\s+/i, '').slice(0, 80);
+        });
+        return out;
+    }
+
+    // --- Etsy shop page (cached per shop) --------------------------------
+    const etsyShopCache = new Map();
+    function shopUrlFromListingUrl(u, sellerName) {
+        if (sellerName) return 'https://www.etsy.com/shop/' + encodeURIComponent(sellerName);
+        try {
+            const url = new URL(u);
+            const m = url.pathname.match(/\/shop\/([^\/?]+)/);
+            if (m) return 'https://www.etsy.com/shop/' + m[1];
+        } catch (e) {}
+        return '';
+    }
+    async function fetchEtsyShop(shopUrl) {
+        if (!shopUrl) return {};
+        if (etsyShopCache.has(shopUrl)) return etsyShopCache.get(shopUrl);
+        const doc = await fetchDoc(shopUrl);
+        const out = { shopSales: '', shopRating: '', shopReviews: '', shopAdmirers: '', shopLocation: '' };
+        if (doc) {
+            const body = textOf(doc.body);
+            let m = body.match(/([\d,]+)\s+sales?\b/i);      if (m) out.shopSales = m[1].replace(/,/g, '');
+            m = body.match(/([\d.]+)\s+out of 5\s+stars?/i); if (m) out.shopRating = m[1];
+            m = body.match(/\(([\d,]+)\s*reviews?\)/i);      if (m) out.shopReviews = m[1].replace(/,/g, '');
+            m = body.match(/([\d,]+)\s+admirers?/i);         if (m) out.shopAdmirers = m[1].replace(/,/g, '');
+            const locEl = doc.querySelector('[data-shop-location], .shop-home-header-info span');
+            if (locEl) {
+                const t = textOf(locEl);
+                if (t && t.length < 100) out.shopLocation = t;
+            }
+        }
+        etsyShopCache.set(shopUrl, out);
+        return out;
+    }
+
+    // --- Public: enrich a single item in place ---------------------------
+    async function enrichOne(item, statusCb) {
+        if (!item) return item;
+        if (item.__enriched) return item;
+        try {
+            if (SITE === 'ebay') {
+                const target = item.url || (item.itemNumber ? 'https://www.ebay.com/itm/' + item.itemNumber : '');
+                if (target) {
+                    statusCb && statusCb('Fetching eBay item page\u2026');
+                    const doc = await fetchDoc(target);
+                    const extra = parseEbayItemPage(doc);
+                    Object.assign(item, extra);
+                }
+            } else if (SITE === 'etsy') {
+                if (item.url) {
+                    statusCb && statusCb('Fetching Etsy listing\u2026');
+                    const doc = await fetchDoc(item.url);
+                    const extra = parseEtsyListingPage(doc);
+                    // Prefer listing-page country if card didn't have one
+                    if (!item.country && extra.country) item.country = extra.country;
+                    delete extra.country;
+                    Object.assign(item, extra);
+                }
+                if (item.seller) {
+                    statusCb && statusCb('Fetching Etsy shop\u2026');
+                    const shopUrl = shopUrlFromListingUrl(item.url, item.seller);
+                    const shop = await fetchEtsyShop(shopUrl);
+                    Object.assign(item, shop);
+                }
+            }
+        } catch (e) { /* swallow — best effort */ }
+        item.__enriched = true;
+        // Persist updated cache so selections across pages keep the enrichment.
+        const id = item.itemNumber || item.url || '';
+        if (id) { state.cache[id] = item; saveState(); }
+        return item;
+    }
+
+    async function enrichMany(items, onProgress) {
+        let done = 0;
+        await mapLimit(items, CONFIG.ENRICH_CONCURRENCY || 3, async it => {
+            await enrichOne(it);
+            done++;
+            if (onProgress) onProgress(done, items.length, it);
+        });
+        return items;
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -1242,13 +1514,13 @@
         setStatus(`Sending ${items.length} listing(s) to Google\u2026`);
         log(`Starting upload of ${items.length} listing(s).`);
 
-        // Optional pre-enrichment for eBay search: pull Available/Sold from item pages.
-        if (MODE === 'ebay-search' && CONFIG.PREFETCH_QTY_ON_SAVE) {
-            setStatus('Fetching Available/Sold\u2026');
-            await mapLimit(items, 3, async (it, idx) => {
-                const q = await fetchQtyForItem(it.url, it.itemNumber);
-                it.available = q.available; it.sold = q.sold;
-                setStatus(`Fetched qty ${idx + 1}/${items.length}`);
+        // Optional pre-enrichment: walk each selected item's detail page in the
+        // background and pull extras (qty, condition, handling, returns, seller
+        // feedback on eBay; favorites/tags/materials + shop stats on Etsy).
+        if (enrichToggle.checked) {
+            setStatus('Enriching selections\u2026');
+            await enrichMany(items, (done, total, it) => {
+                setStatus(`Enriched ${done}/${total}: ${trunc(it.title)}`);
             });
         }
 
@@ -1300,7 +1572,21 @@
                     lastSold:    item.lastSold    || '',
                     // Optional eBay item-page enrichment
                     available:   item.available   || '',
-                    sold:        item.sold        || ''
+                    sold:        item.sold        || '',
+                    // Broad enrichment (filled when "Enrich" is used)
+                    condition:           item.condition           || '',
+                    handlingTime:        item.handlingTime        || '',
+                    returns:             item.returns             || '',
+                    sellerFeedbackScore: item.sellerFeedbackScore || '',
+                    sellerPositivePct:   item.sellerPositivePct   || '',
+                    favorites:           item.favorites           || '',
+                    tags:                item.tags                || '',
+                    materials:           item.materials           || '',
+                    shopSales:           item.shopSales           || '',
+                    shopRating:          item.shopRating          || '',
+                    shopReviews:         item.shopReviews         || '',
+                    shopAdmirers:        item.shopAdmirers        || '',
+                    shopLocation:        item.shopLocation        || ''
                 }
             };
             gmXHR({
@@ -1353,21 +1639,38 @@
  *
  *  const SHARED_SECRET = '';   // match the same in CONFIG.SHARED_SECRET
  *
- *  const HEADERS = {
- *    'Etsy':          ['Captured','Site','Seller','Owner','Account Age','Total Sales',
- *                      'Listing ID','Title','URL','Price','Country','Image'],
- *    'eBay Search':   ['Captured','Site','Seller','Item #','Title','URL','Price',
- *                      'Country','Available','Sold','Image'],
- *    'eBay Store':    ['Captured','Site','Seller','Item #','Title','URL','Price','Image'],
- *    'eBay Research': ['Captured','Site','Seller','Item #','Title','URL',
- *                      'Avg Price','Avg Shipping','Total Sold','Sales','Last Sold','Image']
- *  };
- *
- *  const URL_COL = {
- *    'Etsy':9, 'eBay Search':6, 'eBay Store':6, 'eBay Research':6
- *  };
- *  const IMG_COL = {
- *    'Etsy':12, 'eBay Search':11, 'eBay Store':8, 'eBay Research':12
+ *  // Each row is [header, key-on-body.listing]. The image column is special-cased.
+ *  const SCHEMA = {
+ *    'Etsy': [
+ *      ['Captured','capturedAt'],['Site','site'],['Seller','seller'],['Owner','owner'],
+ *      ['Account Age','accountAge'],['Shop Sales','shopSales'],['Shop Rating','shopRating'],
+ *      ['Reviews','shopReviews'],['Admirers','shopAdmirers'],['Shop Location','shopLocation'],
+ *      ['Listing #','itemNumber'],['Title','title'],['URL','url'],['Price','price'],
+ *      ['Favorites','favorites'],['Tags','tags'],['Materials','materials'],
+ *      ['Ships From','country'],['Image','__image']
+ *    ],
+ *    'eBay Search': [
+ *      ['Captured','capturedAt'],['Site','site'],['Seller','seller'],
+ *      ['Feedback','sellerFeedbackScore'],['Positive %','sellerPositivePct'],
+ *      ['Item #','itemNumber'],['Title','title'],['URL','url'],['Price','price'],
+ *      ['Available','available'],['Sold','sold'],['Condition','condition'],
+ *      ['Handling','handlingTime'],['Returns','returns'],
+ *      ['Ships From','country'],['Image','__image']
+ *    ],
+ *    'eBay Store': [
+ *      ['Captured','capturedAt'],['Site','site'],['Seller','seller'],
+ *      ['Item #','itemNumber'],['Title','title'],['URL','url'],['Price','price'],
+ *      ['Available','available'],['Sold','sold'],['Condition','condition'],
+ *      ['Image','__image']
+ *    ],
+ *    'eBay Research': [
+ *      ['Captured','capturedAt'],['Site','site'],['Seller','seller'],
+ *      ['Item #','itemNumber'],['Title','title'],['URL','url'],
+ *      ['Avg Price','avgPrice'],['Avg Shipping','avgShipping'],
+ *      ['Total Sold','totalSold'],['Sales','sales'],['Last Sold','lastSold'],
+ *      ['Condition','condition'],['Feedback','sellerFeedbackScore'],
+ *      ['Positive %','sellerPositivePct'],['Image','__image']
+ *    ]
  *  };
  *
  *  function doPost(e) {
@@ -1376,23 +1679,22 @@
  *      if (SHARED_SECRET && body.secret !== SHARED_SECRET) return _j({status:'error',message:'Bad secret'});
  *      const ss = SpreadsheetApp.openById(body.sheetId);
  *      const tabName = body.tab || 'Listings';
- *      const headers = HEADERS[tabName] || HEADERS['eBay Search'];
- *      const urlCol  = URL_COL[tabName] || 6;
- *      const imgCol  = IMG_COL[tabName] || headers.length;
+ *      const schema  = SCHEMA[tabName] || SCHEMA['eBay Search'];
+ *      const headers = schema.map(x => x[0]);
+ *      const urlIdx  = schema.findIndex(x => x[1] === 'url');       // 0-based
+ *      const imgIdx  = schema.findIndex(x => x[1] === '__image');
  *      let sheet = ss.getSheetByName(tabName);
  *      if (!sheet) {
  *        sheet = ss.insertSheet(tabName);
  *        sheet.appendRow(headers);
  *        sheet.setFrozenRows(1);
- *        sheet.setColumnWidth(imgCol, 140);
+ *        if (imgIdx >= 0) sheet.setColumnWidth(imgIdx + 1, 140);
  *      }
- *      // Dedupe by URL column, falling back to Item Number if URL is empty.
  *      const last = sheet.getLastRow();
- *      if (last >= 2) {
- *        const existingUrls = sheet.getRange(2, urlCol, last-1, 1).getValues().map(r=>r[0]);
- *        if (body.listing.url && existingUrls.indexOf(body.listing.url) !== -1) return _j({status:'duplicate'});
+ *      if (last >= 2 && urlIdx >= 0 && body.listing.url) {
+ *        const existing = sheet.getRange(2, urlIdx + 1, last - 1, 1).getValues().map(r => r[0]);
+ *        if (existing.indexOf(body.listing.url) !== -1) return _j({status:'duplicate'});
  *      }
- *      // Upload image to Drive
  *      let driveUrl = '';
  *      if (body.listing.image) {
  *        try {
@@ -1406,24 +1708,9 @@
  *          }
  *        } catch (imgErr) { driveUrl = body.listing.image; }
  *      }
- *      const L = body.listing;
  *      const img = driveUrl ? '=IMAGE("' + driveUrl.replace(/"/g,'""') + '")' : '';
- *      let row;
- *      switch (tabName) {
- *        case 'Etsy':
- *          row = [L.capturedAt, L.site, L.seller, L.owner, L.accountAge, L.totalSales,
- *                 L.itemNumber, L.title, L.url, L.price, L.country, img]; break;
- *        case 'eBay Search':
- *          row = [L.capturedAt, L.site, L.seller, L.itemNumber, L.title, L.url, L.price,
- *                 L.country, L.available, L.sold, img]; break;
- *        case 'eBay Store':
- *          row = [L.capturedAt, L.site, L.seller, L.itemNumber, L.title, L.url, L.price, img]; break;
- *        case 'eBay Research':
- *          row = [L.capturedAt, L.site, L.seller, L.itemNumber, L.title, L.url,
- *                 L.avgPrice, L.avgShipping, L.totalSold, L.sales, L.lastSold, img]; break;
- *        default:
- *          row = headers.map(h => L[h.toLowerCase()] || '');
- *      }
+ *      const L = body.listing;
+ *      const row = schema.map(([,k]) => k === '__image' ? img : (L[k] == null ? '' : L[k]));
  *      sheet.appendRow(row);
  *      const r = sheet.getLastRow();
  *      sheet.setRowHeight(r, 120);
