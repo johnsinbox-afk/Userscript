@@ -10,8 +10,8 @@ Proper extension with a settings UI, **"Sign in with Google"**, and pickers for 
 
 - Works in Safari on macOS and iOS (sideload to your own iPhone for free via Xcode).
 - Also runs as a Chrome / Edge unpacked extension if you prefer.
-- See [`docs/SAFARI_SETUP.md`](docs/SAFARI_SETUP.md) for click-by-click install instructions.
-- See [`extension/README.md`](extension/README.md) for developer notes.
+- See `[docs/SAFARI_SETUP.md](docs/SAFARI_SETUP.md)` for click-by-click install instructions.
+- See `[extension/README.md](extension/README.md)` for developer notes.
 
 ## `etsy-ebay-listing-collector.user.js` — Userscript (fallback)
 
@@ -19,15 +19,17 @@ Single-file userscript that you install via **Userscripts**, **Tampermonkey**, o
 
 ## Feature matrix
 
-| | Etsy search | eBay search | eBay store | eBay Research | FB Ad Library | FB feed/posts |
-| --- | :---: | :---: | :---: | :---: | :---: | :---: |
-| Floating overlay + toggle | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
-| Keyword filter (AND/OR/NOT/phrase/parens) | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
-| Country filter | ✓ | ✓ | – | – | – | – |
-| Per-card checkbox | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
-| Persistent selections | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
-| Copy Table / IDs / Seller+Item / URLs | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
-| Enrich item/shop pages | ✓ | ✓ | ✓ | ✓ | – | – |
-| Save to Google Sheets + Drive image | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
+
+|                                           | Etsy search | eBay search | eBay store | eBay Research | FB Ad Library | FB feed/posts |
+| ----------------------------------------- | ----------- | ----------- | ---------- | ------------- | ------------- | ------------- |
+| Floating overlay + toggle                 | ✓           | ✓           | ✓          | ✓             | ✓ (ext)       | ✓ (ext)       |
+| Keyword filter (AND/OR/NOT/phrase/parens) | ✓           | ✓           | ✓          | ✓             | ✓ (ext)       | ✓ (ext)       |
+| Country filter                            | ✓           | ✓           | –          | –             | –             | –             |
+| Per-card checkbox                         | ✓           | ✓           | ✓          | ✓             | ✓ (ext)       | ✓ (ext)       |
+| Persistent selections                     | ✓           | ✓           | ✓          | ✓             | ✓ (ext)       | ✓ (ext)       |
+| Copy Table / IDs / Seller+Item / URLs     | ✓           | ✓           | ✓          | ✓             | ✓ (ext)       | ✓ (ext)       |
+| Enrich item/shop pages                    | ✓           | ✓           | ✓          | ✓             | –             | –             |
+| Save to Google Sheets + Drive image       | ✓           | ✓           | ✓          | ✓             | ✓ (ext)       | ✓ (ext)       |
+
 
 *"(ext)" = in the Safari Web Extension only. The userscript focuses on Etsy/eBay; Facebook support lives in the extension.*
