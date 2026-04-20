@@ -1,157 +1,218 @@
-# Listing Collector — Safari Web Extension: Setup
+# Listing Collector — Safari Web Extension: Setup (Xcode 16.4)
 
-This is the click-by-click guide to take the Safari Web Extension in `extension/`
-from source → running on your iPhone for free (sideloaded with your own Apple ID).
+Click-by-click guide to take the Safari Web Extension in `extension/` from
+source → running on your Mac and your iPhone, signed with your free
+Apple ID. Verified against **Xcode 16.4**.
 
 You will end up with:
 
 - An installable Safari extension on your iPhone **and** your Mac.
 - A **"Sign in with Google"** flow — no more pasting Sheet IDs or Drive folder IDs into config.
 - **Pickers** that list all your existing Google Sheets and Drive folders so you can choose the defaults.
-- The same overlay / checkbox / enrichment UI the userscript had.
+- The same overlay / checkbox / enrichment / Facebook UI the userscript has, plus more.
 
-The flow has three parts:
-
-1. One-time Google Cloud setup (OAuth client ID).
-2. Convert the extension to an Xcode project.
-3. Install on your Mac, then sideload to your iPhone.
+Three parts: Google Cloud setup, Xcode project generation, iPhone sideload.
 
 ---
 
 ## 0. Prerequisites
 
-- A Mac running a recent macOS (Ventura 13.4+ recommended) with **Xcode** installed from the App Store.
-- Your iPhone, a Lightning/USB-C cable, and the same Apple ID on both devices.
-- A free Apple ID is fine (no $99 Developer Program required for this option).
+- **macOS 14.5+** (Sonoma) or **macOS 15.x** (Sequoia). Xcode 16.4 requires this.
+- **Xcode 16.4** already installed. Launch it once from Spotlight — the first launch asks you to accept the license and install additional tools. Let it finish.
+- An **iPhone** on iOS 17 or iOS 18, with the same Apple ID signed in as your Mac.
+- A Lightning/USB-C cable, or Wi-Fi debugging set up.
+- A **free Apple ID** is fine — no $99 Developer Program required.
+
+Open Terminal once and verify Xcode is the one being used:
+
+```bash
+xcode-select -p
+# Expected:  /Applications/Xcode.app/Contents/Developer
+```
+
+If it says `/Library/Developer/CommandLineTools`, fix it:
+
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+```
 
 ---
 
 ## 1. Create a Google OAuth Client ID
 
-1. Go to [https://console.cloud.google.com](https://console.cloud.google.com). Sign in with the Google account whose Sheet/Drive you want to use.
-2. Top-left project picker → **New Project** → name it e.g. **Listing Collector** → **Create**. Wait a few seconds, then click the toast to switch into the new project.
-3. Left nav → **APIs & Services → Library**. Search and **Enable** these three:
-  - **Google Sheets API**
-  - **Google Drive API**
-  - **(Optional) Google Picker API** (we don't need it but it's harmless).
+1. Go to <https://console.cloud.google.com>. Sign in with the Google account whose Sheet/Drive you want to use.
+2. Top-left project picker → **New Project** → name it e.g. **Listing Collector** → **Create**. Wait a few seconds, click the toast to switch into the new project.
+3. Left nav → **APIs & Services → Library**. Search and **Enable** these:
+   - **Google Sheets API**
+   - **Google Drive API**
 4. Left nav → **APIs & Services → OAuth consent screen**.
-  - User Type: **External** → Create.
-  - App name: **Listing Collector**. User support email: your address. Developer contact: your address. Save.
-  - **Scopes** step: click **Add or Remove Scopes** → filter by `drive` and `spreadsheets` → check
-    - `.../auth/drive.file`
-    - `.../auth/drive.metadata.readonly`
-    - `.../auth/spreadsheets`
-    - `.../auth/userinfo.email` and `.../auth/userinfo.profile` (these appear automatically when you select the first ones).
-    Save.
-  - **Test users** step: add your own Google email address. Save.
-  - You can leave the app in *Testing* mode forever — it just means you (and any test users you add) can sign in without the "Google hasn't verified this app" warning never going away. You do NOT need to submit for verification.
+   - User Type: **External** → Create.
+   - App name: **Listing Collector**. User support email: yours. Developer contact: yours. **Save and continue**.
+   - **Scopes** step: click **Add or Remove Scopes** → filter by `drive` and `spreadsheets` → check:
+     - `.../auth/drive.file`
+     - `.../auth/drive.metadata.readonly`
+     - `.../auth/spreadsheets`
+     - `.../auth/userinfo.email` and `.../auth/userinfo.profile` (show up automatically).
+   - **Test users**: add your own Google email. **Save**.
+   - Keep the app in *Testing* mode forever — means only you (and any test users you add) can sign in, but no review needed.
 5. Left nav → **APIs & Services → Credentials** → **+ Create Credentials → OAuth client ID**.
-  - Application type: **Web application**.
-  - Name: **Listing Collector extension**.
-  - **Authorized redirect URIs** — you need to paste the extension's redirect URL here. You don't have it yet because the extension isn't installed. Leave this empty for now; we'll come back after step 3.
-  - Click **Create**. Copy the **Client ID** (ends in `.apps.googleusercontent.com`). Save it somewhere — we'll paste it into the extension settings later.
+   - Application type: **Web application**.
+   - Name: **Listing Collector extension**.
+   - **Authorized redirect URIs** — leave blank for now. We'll add the extension's redirect URI once we have it (end of Part 4).
+   - Click **Create**. Copy the **Client ID** (ends in `.apps.googleusercontent.com`). Save it — we'll paste it into the extension's Settings page later.
 
 ---
 
-## 2. Convert the extension folder to an Xcode project
+## 2. Generate the Xcode project from the `extension/` folder
 
-Apple ships a tool that takes a plain Web Extension folder and wraps it in the Xcode boilerplate Safari needs.
+Apple ships a tool that wraps a plain Web Extension folder in the Xcode boilerplate Safari needs.
 
 1. Open **Terminal** on your Mac.
-2. `cd` into wherever you cloned this repo, then into the `extension/` folder:
-  ```bash
+2. `cd` into this repo, then into `extension/`:
+
+   ```bash
    cd path/to/Userscript/extension
-  ```
-3. Run the converter:
-  ```bash
-   xcrun safari-web-extension-converter --project-location ../safari-app --app-name "Listing Collector" --bundle-identifier com.yourname.listingcollector --macos-only false --ios-only false --no-open .
-  ```
-   Replace `yourname` with your own reverse-domain style string — it only has to be unique to you (e.g. `com.jsmith.listingcollector`). The tool will:
-  - Create a new Xcode project at `../safari-app/Listing Collector/` with:
-    - A small macOS container app.
-    - A small iOS container app.
-    - Two extension targets that both reference the files in `extension/` by path, so when you edit `content.js`, `background.js`, etc., Xcode picks up the changes.
-4. Open it in Xcode:
-  ```bash
+   ```
+
+3. Run the converter. Replace `jsmith` with anything unique to you (reverse-domain style). Xcode 16.4 uses the same flag names:
+
+   ```bash
+   xcrun safari-web-extension-converter . \
+       --project-location ../safari-app \
+       --app-name "Listing Collector" \
+       --bundle-identifier com.jsmith.listingcollector \
+       --copy-resources \
+       --no-open
+   ```
+
+   Flag notes:
+   - The **folder argument (`.`)** goes last — it's the path to the Web Extension source.
+   - **`--copy-resources`** duplicates `manifest.json`, `content.js`, etc. into the Xcode project. Recommended: Xcode can edit and rebuild without touching your source tree. Omit it if you'd rather have the project reference the live files (useful during rapid iteration, but easy to accidentally delete from Xcode).
+   - `--no-open` suppresses the auto-launch of Xcode so we can verify things first.
+   - **Do not pass** `--macos-only false` or `--ios-only false` — those are toggles, not booleans. Passing them at all *enables* the restriction. Omit both to get both iOS and macOS targets (what we want).
+
+4. Open the project:
+
+   ```bash
    open "../safari-app/Listing Collector/Listing Collector.xcodeproj"
-  ```
+   ```
 
 ---
 
-## 3. Sign both targets with your free Apple ID
+## 3. Sign every target with your free Apple ID
 
-Xcode needs your Apple ID so it can sign the app it installs on your phone.
+Xcode 16.4 menu paths:
 
-1. In Xcode's menu bar: **Xcode → Settings → Accounts** → **+** at the bottom-left → **Apple ID** → sign in with the same Apple ID that's on your iPhone. Close the Settings window.
-2. In the left sidebar of Xcode, click the blue project root node (**Listing Collector**).
-3. You'll see targets listed: **Listing Collector** (iOS), **Listing Collector (macOS)**, **Listing Collector Extension** (iOS), **Listing Collector Extension (macOS)**. For each of the four:
-  - Click the target → **Signing & Capabilities** tab.
-  - Check **Automatically manage signing**.
-  - **Team**: pick your Apple ID entry (will say "Personal Team" for a free account).
-  - If the Bundle Identifier is flagged as taken (it shouldn't be, with a unique `com.yourname.` prefix), tweak it — e.g. `com.yourname.listingcollector2`. Do the same prefix for every target.
+1. **Xcode → Settings…** (`⌘,`) → **Accounts** → **+** (bottom-left) → **Apple ID** → sign in with the Apple ID that's on your iPhone. Close Settings.
+2. In the left sidebar click the blue project root icon (**Listing Collector**). The central pane splits into Targets on the left and editor tabs at the top.
+3. You'll see four targets:
+   - **Listing Collector** (macOS container app)
+   - **Listing Collector (iOS)** (iOS container app)
+   - **Listing Collector Extension** (macOS extension)
+   - **Listing Collector Extension (iOS)** (iOS extension)
 
----
+   Xcode 16.4 sometimes names these **"Listing Collector"** + **"Listing Collector (iOS)"** + **"Listing Collector Extension"** + **"Listing Collector Extension (iOS)"** — exact names depend on the converter. Either way, you need to do the signing dance for **all four**:
 
-## 4. Build & install on your Mac
+   - Click the target.
+   - Open the **Signing & Capabilities** tab (top of the editor pane).
+   - Check **Automatically manage signing**.
+   - **Team**: pick your Apple ID entry (it'll say "(Personal Team)" for a free account).
+   - **Bundle Identifier**: should already have the `com.jsmith.listingcollector…` prefix you passed to the converter. If Xcode complains "Bundle Identifier is not available", append something to make it unique — e.g. `com.jsmith.listingcollector.v2`. Keep the same prefix across the four targets; only the suffix differs.
 
-1. In the top-left Xcode toolbar scheme selector, pick **Listing Collector (macOS) → My Mac**.
-2. Press the ▶ Run button. A tiny app with a big button opens and says "Listing Collector's extension is currently off. You can turn it on in Safari Extensions preferences."
-3. Open **Safari → Settings → Extensions** (⌘,). Enable **Listing Collector**. When prompted about websites, choose **Always Allow on Every Website** (or at minimum allow `etsy.com` and `ebay.com`).
-4. Go to [https://www.etsy.com/search?q=lamp](https://www.etsy.com/search?q=lamp) or [https://www.ebay.com/sch/i.html?_nkw=lamp](https://www.ebay.com/sch/i.html?_nkw=lamp). You should see the round blue **List** toggle bottom-right, exactly like the userscript.
-
-## 5. Configure the extension (one-time)
-
-1. Right-click the extension icon in Safari's toolbar (or if hidden: View → Customize Toolbar and drag it out) → **Preferences** or **Manage Extensions → Options**.
-2. You're in the Settings page built into the extension. Three steps:
-  **Step 1 — OAuth Client ID**
-  - Copy the **Redirect URI** shown (it looks like `https://<random-id>.safari-web-extension.com/`). This is the Apple-issued address Safari uses for the auth callback.
-  - In a second tab, go back to your Google Cloud **OAuth client** from Part 1, step 5. Click **Edit**, add that Redirect URI under **Authorized redirect URIs**, **Save**.
-  - Back in the Settings page: paste the OAuth **Client ID** and click **Save**.
-   **Step 2 — Sign in with Google**
-  - Click **Sign in with Google**. Approve the consent screen.
-  - The page now shows "Signed in as [you@example.com](mailto:you@example.com)".
-   **Step 3 — Target Spreadsheet & Drive Folder**
-  - Under **Spreadsheet**, the list of your existing Google Sheets appears. Click one to select it, or press **+ New sheet** to create one named whatever you want.
-  - Under **Drive folder for images**, same thing. Pick an existing folder or create e.g. **Listing Images**.
-3. Hit **Run test**. You should see `{ "status": "added", "tab": "eBay Search" }`. Check the sheet — there should be a row with a placeholder image.
-
-Done on Mac. Onto iPhone.
+4. Xcode will show a red **"Automatic signing failed"** box the first time on each target — that's normal on a brand-new Personal Team. Wait a few seconds, the banner resolves itself once Apple issues the cert. If it sticks, click the "Try Again" link inside the banner.
 
 ---
 
-## 6. Sideload to your iPhone
+## 4. Build & install on your Mac first (so we can fetch the redirect URI)
 
-1. Plug your iPhone into the Mac with a cable. Unlock it. If it's the first time the Mac sees it, accept the "Trust this computer" prompt.
-2. In Xcode's toolbar scheme selector, pick **Listing Collector (iOS) → [your iPhone name]**.
-3. ▶ Run. Xcode will say "Build succeeded", copy the app to your phone, and launch a minimal container app there. You only need the app to exist; close it.
-4. On the iPhone:
-  - **Settings → Safari → Extensions → Listing Collector** → toggle it **On**.
-  - Under "Allowed Websites", set **All Websites → Allow** (or at minimum Etsy and eBay → Allow).
-5. Still on the iPhone, open **Settings → General → VPN & Device Management → [your Apple ID, under "Developer App"]** → **Trust**. This is the mandatory extra confirmation Apple asks for any app signed with a free Apple ID.
-6. Open Safari on the iPhone. Visit [https://www.ebay.com/sch/i.html?_nkw=lamp](https://www.ebay.com/sch/i.html?_nkw=lamp). You should see the floating **List** button appear.
-7. Tap it → **Settings** link. Paste the same OAuth Client ID again (the settings page is per-device). Sign in. Pick the same Sheet and Folder. Run the test.
+1. **Scheme selector** (top-left of the Xcode toolbar, next to the play button). Click the left half and pick **Listing Collector** (the macOS app, *not* "Extension"). Click the right half and pick **My Mac**.
+2. Press ▶ Run. Xcode builds (~60 seconds the first time) and launches a small window with the message "Listing Collector's extension is currently off. You can turn it on in Safari Extensions preferences."
+3. Open **Safari → Settings → Extensions** (`⌘,`). Enable **Listing Collector**. For **Allowed Websites**, choose either **Always Allow on Every Website** or at minimum allow `etsy.com`, `ebay.com`, and `facebook.com`.
+4. Open a test page — e.g. <https://www.ebay.com/sch/i.html?_nkw=lamp>. You should see the round blue **List** toggle bottom-right.
+
+### Configure the extension
+
+1. In Safari's toolbar click the small grey puzzle-piece, find **Listing Collector**, right-click → **Manage Extensions…** → on the extension's row click the **"</>"** or **Options** button; or simply visit `safari-web-extension://<generated-id>/ui/options.html` if Safari shows that URL.
+
+   Easier path: click the **List** button on any Etsy/eBay page to open the overlay panel, then tap **Open settings** in its header — it takes you straight to the options page.
+
+2. **Step 1 — OAuth Client ID**
+   - The page shows **Redirect URI: `https://abcdef…safari-web-extension.com/`** — a URL Apple generated for this install of the extension.
+   - Click **Copy**.
+   - In your Google Cloud browser tab, go back to **APIs & Services → Credentials → [your OAuth client] → Edit**. Paste the URI under **Authorized redirect URIs**. **Save**. (It can take a minute to propagate.)
+   - Back in the Settings page, paste your **Client ID** into the big text box and click **Save**.
+
+3. **Step 2 — Sign in with Google**
+   - Click **Sign in with Google**. Safari opens Google's consent screen. Click **Continue** past the "Google hasn't verified this app" warning (expected for Testing-mode apps). Approve.
+   - The page refreshes and shows **"Signed in as you@example.com"**.
+
+4. **Step 3 — Target Spreadsheet & Drive Folder**
+   - Your existing Google Sheets appear in the list. Click one, or press **+ New sheet** and give it a name.
+   - Same for **Drive folder for images**. Pick an existing one, or create **Listing Images**.
+
+5. **Step 4 — Test**
+   - Click **Run test**. You should see `{ "status": "added", "tab": "eBay Search" }` within a few seconds.
+   - Open your Sheet. There should be a dummy row with a placeholder image rendered inline.
+
+If the test works on Mac, the iPhone half is just copying the same config across.
 
 ---
 
-## 7. The 7-day re-signing dance (free Apple ID only)
+## 5. Sideload to your iPhone
 
-A free-Apple-ID signed app expires **7 days** after it was built. When it does, the extension will stop appearing on your iPhone and you'll see "Unable to Verify App" if you open the container. To refresh:
+1. Plug iPhone in. Unlock it. If it's the first time your Mac sees this phone, accept "Trust this computer" on the phone.
+2. In Xcode 16.4, **Window → Devices and Simulators** → pick your iPhone on the left → it should appear under "Connected". If it says "Preparing…", wait until done. If it says "iOS x.y is not supported by this version of Xcode", you need the matching iOS support bundle — Xcode 16.4 ships support for iOS 17 and iOS 18; older iOS needs an older Xcode.
+3. Close Devices and Simulators.
+4. **Scheme selector** → pick **Listing Collector (iOS)** + **[your iPhone name]** on the right.
+5. ▶ Run. Xcode builds, copies the app, and launches a minimal container app on the phone. You can close that app — it exists only so the extension can live on the device.
 
-1. Plug the iPhone into the Mac.
+### On the iPhone
+
+1. **Settings → Safari → Extensions** → **Listing Collector** → toggle **On**.
+2. Under **Allowed Websites**, set **All Websites → Allow** (or specifically allow Etsy, eBay, Facebook).
+3. **Settings → General → VPN & Device Management** → under *Developer App* tap your Apple ID → **Trust**. (Only asked once per Apple ID on that phone.)
+4. Open Safari. Visit <https://www.ebay.com/sch/i.html?_nkw=lamp> or <https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=US&view_all_page_id=>. The **List** toggle should appear bottom-right.
+5. Tap it → **Open settings** in the panel header.
+   - The Redirect URI is **the same** as on Mac (`https://<id>.safari-web-extension.com/`). Apple uses the same per-extension ID across Macs and iPhones that share your Apple ID's developer team, so **you do NOT need to add a second redirect URI to Google Cloud**.
+   - Paste the same **Client ID**. Click **Sign in with Google**. Pick the same **Sheet** and **Folder** (they're stored per-device for now).
+
+If anything misbehaves here, say so and paste the exact error text.
+
+---
+
+## 6. The 7-day re-sign dance (free Apple ID only)
+
+Apps signed with a free Apple ID expire **7 days** after build. When that happens, the extension will stop working on your iPhone and you'll see "Unable to Verify App" if you tap the container app. To refresh:
+
+1. Plug iPhone in.
 2. Open the Xcode project.
-3. Pick **Listing Collector (iOS) → [iPhone]** again, and press ▶.
+3. Scheme selector → **Listing Collector (iOS)** + **[iPhone]** → ▶. No code changes needed.
 
-That's it. No code change needed, just a rebuild. On the Mac the same certificate also expires but in practice you'll rarely notice because you usually re-run it yourself while changing things.
+On Mac, the cert also expires but since you usually rebuild the Mac target on your own timetable you'll rarely notice.
 
-If you don't want the weekly chore, upgrade to the $99/year Apple Developer Program (same Apple ID, different tier): the cert lasts a year. No code change.
+If the weekly rebuild becomes annoying: **$99/year Apple Developer Program** upgrades the Personal Team to a full team, which issues year-long certs. Same Apple ID, no code change, no Google Cloud change — everything that worked on the free plan keeps working for a year.
 
 ---
 
-## Common issues
+## Common issues specific to Xcode 16.4
 
-- **"Unable to install / Untrusted Developer" on iPhone**: you skipped Part 6 step 5 (Settings → General → VPN & Device Management → Trust).
-- **Extension is installed but the List button never appears**: Safari → Settings → Extensions → Listing Collector → Allowed Websites → set to **Allow** (or Always Allow). Then reload the Etsy/eBay page.
-- **Sign-in window opens then closes immediately with "Not signed in."**: the Redirect URI in Google Cloud doesn't match the one in the Settings page exactly. Copy-paste it fresh, including the trailing `/`.
-- **"Access blocked — This app is not verified"**: you're signed into a Google account that isn't on the Test Users list, OR you're using a Workspace account with strict admin policies. Add your email under OAuth consent screen → Test Users; or use a personal Gmail.
-- **Save writes the row but the image cell shows a broken icon in the Sheet for ~60 seconds**: that's Google caching `=IMAGE()`. Normal. If it never loads, confirm the row's image URL starts with `https://drive.google.com/uc?export=view&id=...` and open it in your browser — you should see the image. If you don't, re-check that the folder isn't hidden under a restricted shared drive.
+- **"Sandbox: xcode-select denied operation"** → you still have the old Command Line Tools path active. Run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`.
+- **"The bundle identifier is already taken"** during signing → append a suffix (e.g. `.v2`) to all four targets' bundle IDs; keep the prefix identical.
+- **"Automatic signing failed – No profiles for 'com.jsmith.listingcollector' were found"** → usually resolves itself within ~30 s on a new Personal Team. If not, click the "Try Again" button in the banner.
+- **Safari on Mac never shows the extension after ▶** → in Safari: Settings → Extensions → click on **Listing Collector** in the left list → toggle **On**. If it's not in the list at all, run the macOS scheme again and confirm the build succeeded.
+- **iPhone build error: "Could not locate device support files"** → the phone is on a newer iOS than Xcode 16.4 supports (iOS 19 beta, etc.). Either downgrade the phone's iOS or upgrade to the next Xcode.
+- **"This app is not available in your country" when signing in to Google** → you're on a Google Workspace account where the admin has blocked unverified apps. Use a personal Gmail, or ask the admin to allowlist your OAuth client ID.
+- **`=IMAGE()` shows a broken thumbnail in the Sheet for ~60 s after saving** → that's Google caching. Normal. If it never loads, click the cell and confirm the URL starts with `https://drive.google.com/uc?export=view&id=`; open that URL in a browser. If it errors, the folder is on a Shared Drive with restricted sharing — move it to My Drive or change the folder's sharing to Anyone with the link.
 
+---
+
+## What to do when you update the extension source
+
+If you ran the converter with `--copy-resources`, Xcode has its own copies of the extension files. To sync your changes:
+
+1. Edit the files in `extension/`.
+2. In Xcode, find the `Shared (Extension)` or `Resources` group in the left sidebar and **delete references** to the outdated files (choose "Remove Reference" not "Move to Trash").
+3. Drag the updated files from Finder into the Xcode group. Tick "Copy items if needed".
+4. ▶ Run again.
+
+If you ran without `--copy-resources`, Xcode already references your repo files directly — just ▶ Run after editing.
