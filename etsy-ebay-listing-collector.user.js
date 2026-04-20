@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Etsy & eBay Listing Collector → Google Sheets (Pro)
+// @name         Etsy & eBay & Facebook Listing / Ad Collector → Google Sheets
 // @namespace    https://github.com/your-handle/userscripts
-// @version      2.0.0
-// @description  Floating overlay for Etsy, eBay search, eBay stores, and eBay Seller Hub Research. Filter by keyword (AND/OR/NOT) and by country, tick individual listings, copy rich tables to the clipboard, and save selections to a Google Sheet with the main image uploaded permanently to Google Drive. Mobile friendly.
+// @version      2.1.0
+// @description  Floating overlay for Etsy, eBay search, eBay stores, eBay Seller Hub Research, Facebook Ad Library, and Facebook feed. Filter, tick, copy, save. Mobile friendly.
 // @author       You
 // @match        https://www.etsy.com/*search*
 // @match        https://www.etsy.com/search*
@@ -17,6 +17,8 @@
 // @match        https://*.ebay.com/str/*
 // @match        https://www.ebay.com/sh/research*
 // @match        https://www.ebay.com/sh/research/*
+// @match        https://www.facebook.com/*
+// @match        https://*.facebook.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @grant        GM_setValue
@@ -32,6 +34,9 @@
 // @connect      www.etsy.com
 // @connect      etsy.com
 // @connect      i.etsystatic.com
+// @connect      www.facebook.com
+// @connect      facebook.com
+// @connect      *.fbcdn.net
 // @run-at       document-idle
 // ==/UserScript==
 

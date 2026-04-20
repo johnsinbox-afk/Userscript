@@ -60,6 +60,28 @@ const SCHEMA = {
             ['Condition','condition'], ['Feedback','sellerFeedbackScore'],
             ['Positive %','sellerPositivePct'], ['Image','__image']
         ]
+    },
+    'fb-ads': {
+        tab: 'Facebook Ads',
+        cols: [
+            ['Captured','capturedAt'], ['Status','fbStatus'],
+            ['Library ID','libraryId'], ['Page','page'], ['Page URL','pageUrl'],
+            ['Platforms','platforms'], ['Start','startDate'], ['End','endDate'],
+            ['Total Active','totalActiveTime'],
+            ['Ad Text','adText'], ['CTA Text','adLinkText'], ['CTA URL','adLinkUrl'],
+            ['Ad URL','url'], ['Video URL','videoUrl'], ['Image','__image']
+        ]
+    },
+    'fb-posts': {
+        tab: 'Facebook Posts',
+        cols: [
+            ['Captured','capturedAt'], ['Poster','page'], ['Poster URL','pageUrl'],
+            ['Sponsored','isSponsored'], ['Posted','postTime'],
+            ['Text','adText'], ['Permalink','url'],
+            ['CTA Text','adLinkText'], ['CTA URL','adLinkUrl'],
+            ['Reactions','reactions'], ['Comments','comments'], ['Shares','shares'],
+            ['Video URL','videoUrl'], ['Image','__image']
+        ]
     }
 };
 

@@ -16,6 +16,9 @@
     "https://*.etsy.com/*",
     "https://www.ebay.com/*",
     "https://*.ebay.com/*",
+    "https://www.facebook.com/*",
+    "https://*.facebook.com/*",
+    "https://*.fbcdn.net/*",
     "https://sheets.googleapis.com/*",
     "https://www.googleapis.com/*",
     "https://oauth2.googleapis.com/*",
@@ -37,7 +40,9 @@
         "https://www.ebay.com/str/*",
         "https://*.ebay.com/str/*",
         "https://www.ebay.com/sh/research*",
-        "https://www.ebay.com/sh/research/*"
+        "https://www.ebay.com/sh/research/*",
+        "https://www.facebook.com/*",
+        "https://*.facebook.com/*"
       ],
       "js": ["content.js"],
       "css": ["content.css"],

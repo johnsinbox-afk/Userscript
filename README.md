@@ -1,6 +1,6 @@
 # Listing Collector
 
-A tool for capturing listings from Etsy and eBay (search pages, stores, and eBay Seller Hub Research) into a Google Sheet, with the main listing images uploaded permanently to your Google Drive and embedded in the sheet via `=IMAGE()`.
+A tool for capturing listings and content from Etsy, eBay (search / stores / Seller Hub Research), and Facebook (Ad Library / feed) into a Google Sheet, with the main image uploaded permanently to your Google Drive and embedded in the sheet via `=IMAGE()`.
 
 Two independent implementations live in this repo:
 
@@ -17,15 +17,17 @@ Proper extension with a settings UI, **"Sign in with Google"**, and pickers for 
 
 Single-file userscript that you install via **Userscripts**, **Tampermonkey**, or **Violentmonkey**. It uses a Google Apps Script Web App as the save backend (you paste three IDs into the `CONFIG` block at the top of the file). Kept around for anyone who doesn't want to build an Xcode project.
 
-## Feature matrix (both implementations)
+## Feature matrix
 
-| | Etsy search | eBay search | eBay store | eBay Research |
-| --- | :---: | :---: | :---: | :---: |
-| Floating overlay + toggle | ✓ | ✓ | ✓ | ✓ |
-| Keyword filter (AND / OR / NOT / "phrase" / parens) | ✓ | ✓ | ✓ | ✓ |
-| Country filter (auto-built) | ✓ | ✓ | – | – |
-| Per-listing checkbox | ✓ | ✓ | ✓ | ✓ |
-| Persistent selections across pagination | ✓ | ✓ | ✓ | ✓ |
-| Copy Table / IDs / Seller+Item / URLs | ✓ | ✓ | ✓ | ✓ |
-| Enrich item/shop pages | ✓ | ✓ | ✓ | ✓ (already fetches seller) |
-| Save to Google Sheets (image in Drive) | ✓ | ✓ | ✓ | ✓ |
+| | Etsy search | eBay search | eBay store | eBay Research | FB Ad Library | FB feed/posts |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| Floating overlay + toggle | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
+| Keyword filter (AND/OR/NOT/phrase/parens) | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
+| Country filter | ✓ | ✓ | – | – | – | – |
+| Per-card checkbox | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
+| Persistent selections | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
+| Copy Table / IDs / Seller+Item / URLs | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
+| Enrich item/shop pages | ✓ | ✓ | ✓ | ✓ | – | – |
+| Save to Google Sheets + Drive image | ✓ | ✓ | ✓ | ✓ | ✓ (ext) | ✓ (ext) |
+
+*"(ext)" = in the Safari Web Extension only. The userscript focuses on Etsy/eBay; Facebook support lives in the extension.*

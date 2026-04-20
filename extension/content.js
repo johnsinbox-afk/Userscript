@@ -31,53 +31,78 @@
 
     // ── Site / mode detection ──────────────────────────────────────────
     const host = location.hostname.toLowerCase();
+    const path = location.pathname.toLowerCase();
     const isEtsy = /(^|\.)etsy\.com$/i.test(host);
     const isEbay = /(^|\.)ebay\./i.test(host);
-    if (!isEtsy && !isEbay) return;
+    const isFb   = /(^|\.)facebook\.com$/i.test(host) || /(^|\.)fb\.com$/i.test(host);
+    if (!isEtsy && !isEbay && !isFb) return;
 
+    // Per-mode config. `cardSelector` is optional — if absent, the mode must
+    // provide a `findCards()` function that returns an array of DOM roots.
     const MODES = {
         'etsy-search': {
             site: 'etsy',
-            card:  '.v2-listing-card[data-listing-id]',
+            cardSelector: '.v2-listing-card[data-listing-id]',
             title: 'h3, h2, a.listing-link, [data-listing-card-title]',
             price: '.currency-value, [data-listing-price], [data-buy-box-region="price"] .currency-value',
             image: 'img[srcset], img[src]'
         },
         'ebay-research': {
             site: 'ebay',
-            card:  'tr.research-table-row',
+            cardSelector: 'tr.research-table-row',
             title: '.research-table-row__product-info-name span[data-item-id], span[data-item-id]',
             price: '.research-table-row__avgSoldPrice',
             image: 'img'
         },
         'ebay-store': {
             site: 'ebay',
-            card:  'article.StoreFrontItemCard, article.str-item-card.StoreFrontItemCard',
+            cardSelector: 'article.StoreFrontItemCard, article.str-item-card.StoreFrontItemCard',
             title: '.str-card-title .str-text-span, .str-item-card__property-title .str-text-span',
             price: '.str-item-card__property-displayPrice',
             image: 'img[data-testid="str-img"], .str-image img, img.zoom'
         },
         'ebay-search': {
             site: 'ebay',
-            card:  '.su-card-container',
+            cardSelector: '.su-card-container',
             title: '.s-card__title',
             price: '.s-card__price',
             image: 'img.s-card__image'
+        },
+        'fb-ads': {
+            site: 'facebook',
+            // FB has no stable classes; we discover cards by walking up from
+            // any "Library ID" text node. See findFbAdCards() below.
+            findCards: () => findFbAdCards()
+        },
+        'fb-posts': {
+            site: 'facebook',
+            // Facebook posts / sponsored posts in the main feed.
+            cardSelector: 'div[role="article"], [data-pagelet^="FeedUnit_"] div[role="article"]'
         }
     };
     function detectMode() {
         if (isEtsy) return 'etsy-search';
-        for (const m of ['ebay-research', 'ebay-store', 'ebay-search']) {
-            if (document.querySelector(MODES[m].card)) return m;
+        if (isEbay) {
+            for (const m of ['ebay-research', 'ebay-store', 'ebay-search']) {
+                if (document.querySelector(MODES[m].cardSelector)) return m;
+            }
+            return 'ebay-search';
+        }
+        if (isFb) {
+            // /ads/library/* → ads mode; otherwise feed/posts mode.
+            if (/\/ads\/library/.test(path)) return 'fb-ads';
+            return 'fb-posts';
         }
         return 'ebay-search';
     }
     let MODE = detectMode(), CFG = MODES[MODE];
     const SITE = CFG.site;
     function maybeUpgradeMode() {
-        if (MODE !== 'ebay-search') return;
-        for (const m of ['ebay-research', 'ebay-store']) {
-            if (document.querySelector(MODES[m].card)) { MODE = m; CFG = MODES[m]; return; }
+        if (isEbay && MODE !== 'ebay-search') return;
+        if (isEbay) {
+            for (const m of ['ebay-research', 'ebay-store']) {
+                if (document.querySelector(MODES[m].cardSelector)) { MODE = m; CFG = MODES[m]; return; }
+            }
         }
     }
 
@@ -293,6 +318,10 @@
         return true;
     }
     function isCardEligible(card) {
+        // Facebook has its own scoping (we only ever pick cards with a
+        // Library ID or role=article), so skip the pagination / carousel
+        // exclusions which don't apply.
+        if (isFb) return true;
         if (isBelowPagination(card)) return false;
         if (isUnderExcludedHeading(card)) return false;
         if (isInCarouselOrSrpAnswer(card)) return false;
@@ -311,7 +340,13 @@
             shopSales:'', shopRating:'', shopReviews:'', shopAdmirers:'',
             favorites:'', tags:'', materials:'', shopLocation:'',
             condition:'', handlingTime:'', returns:'',
-            sellerFeedbackScore:'', sellerPositivePct:''
+            sellerFeedbackScore:'', sellerPositivePct:'',
+            // Facebook fields (ads + posts)
+            libraryId:'', fbStatus:'', page:'', pageUrl:'', pageIcon:'',
+            platforms:'', startDate:'', endDate:'', totalActiveTime:'',
+            adText:'', adLinkText:'', adLinkUrl:'',
+            videoUrl:'', videoThumb:'',
+            postTime:'', isSponsored:'', reactions:'', comments:'', shares:''
         };
     }
     function extractEtsy(card) {
@@ -404,8 +439,330 @@
             case 'ebay-search':   return extractEbaySearch(card);
             case 'ebay-store':    return extractEbayStore(card);
             case 'ebay-research': return extractEbayResearch(card);
+            case 'fb-ads':        return extractFbAd(card);
+            case 'fb-posts':      return extractFbPost(card);
         }
         return baseRecord();
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    //  Facebook helpers
+    // ────────────────────────────────────────────────────────────────────
+    const FB_PLAT_OK = /^(Facebook|Instagram|Messenger|Audience Network|Threads)$/i;
+    const FB_CTA_BLOCK_HREF = /(metastatus\.com|ads-transparency|about[-\s]?ads|privacy|terms|cookies|help|faq|status)/i;
+    const FB_CTA_BLOCK_TEXT = /^(System status|Ad Library Report|Ad Library API|Branded Content|Open navigation panel|Close navigation panel|Subscribe to email updates|CSV exports|FAQ|About ads and data use|Privacy|Terms|Cookies)$/i;
+
+    function fbVisible(e) {
+        if (!e || e.nodeType !== 1) return false;
+        const s = getComputedStyle(e);
+        if (s.display === 'none' || s.visibility === 'hidden' || +s.opacity === 0) return false;
+        const r = e.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+    }
+    function fbUnwrap(u) {
+        try {
+            if (!u) return '';
+            const url = new URL(u, location.href);
+            if (url.hostname === 'l.facebook.com' && url.pathname === '/l.php' && url.searchParams.get('u')) return url.searchParams.get('u');
+            return u;
+        } catch (e) { return u; }
+    }
+    function fbImgOf(img) {
+        if (!img) return '';
+        let raw = img.currentSrc || img.src || img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-image') || '';
+        raw = (raw || '').split(' ')[0];
+        raw = absUrl(raw);
+        if (raw && !raw.startsWith('data:')) {
+            try { const u = new URL(raw); if (/\.webp$/i.test(u.pathname)) u.pathname = u.pathname.replace(/\.webp$/i, '.jpg'); return u.href; }
+            catch (e) {}
+        }
+        return raw;
+    }
+    function fbLargestImg(el) {
+        if (!el) return null;
+        const imgs = Array.from(el.querySelectorAll('picture img, img')).filter(i => fbVisible(i) && fbImgOf(i));
+        let best = null, area = -1;
+        for (const i of imgs) {
+            const r = i.getBoundingClientRect(), aa = r.width * r.height;
+            if (aa > area) { area = aa; best = i; }
+        }
+        return best;
+    }
+    function fbPickPageIcon(card) {
+        const imgs = Array.from(card.querySelectorAll('img[alt]')).filter(i => fbVisible(i) && textOf(i) === '' && (i.getAttribute('alt') || '').trim() && fbImgOf(i));
+        let best = null, score = 1e18;
+        for (const i of imgs) {
+            const alt = (i.getAttribute('alt') || '').trim();
+            if (!alt || alt.length > 80) continue;
+            const r = i.getBoundingClientRect(), area = r.width * r.height;
+            if (area < 200 || area > 25000) continue;
+            const sc = r.top * 12 + r.left + Math.abs(area - 3600);
+            if (sc < score) { score = sc; best = i; }
+        }
+        return best;
+    }
+    function fbPageFromIcon(card) {
+        const icon = fbPickPageIcon(card);
+        if (!icon) return { page: '', pageUrl: '', pageIcon: '' };
+        const page = (icon.getAttribute('alt') || '').trim();
+        const pageIcon = fbImgOf(icon);
+        let pageUrl = '';
+        let scope = icon.closest('div') || icon.parentElement || card;
+        for (let k = 0; k < 7 && scope && scope !== document.body; k++) {
+            for (const a of scope.querySelectorAll('a[href]')) {
+                let href = fbUnwrap(absUrl(a.getAttribute('href') || a.href || ''));
+                if (!href || /l\.facebook\.com\/l\.php/i.test(href)) continue;
+                try {
+                    const u = new URL(href);
+                    const h = u.hostname.replace(/^www\./, '');
+                    if (h !== 'facebook.com' && !h.endsWith('facebook.com')) continue;
+                    if (u.pathname.startsWith('/ads/library')) continue;
+                    if (/\/privacy|\/policies|\/help|\/login/i.test(u.pathname)) continue;
+                    const tx = textOf(a);
+                    if (tx && tx.toLowerCase() === page.toLowerCase()) { pageUrl = href; break; }
+                    if (!pageUrl) pageUrl = href;
+                } catch (e) {}
+            }
+            if (pageUrl) break;
+            scope = scope.parentElement;
+        }
+        return { page, pageUrl, pageIcon };
+    }
+    function fbFindLibraryId(card) {
+        const t = textOf(card);
+        const m = t.match(/Library ID\s*[:#]?\s*([0-9]{6,})/i);
+        return m ? m[1] : '';
+    }
+    function fbFindStatus(card) {
+        const t = textOf(card);
+        let m = t.match(/Status\s*:\s*(Active|Inactive)\b/i);
+        if (m) return m[1];
+        m = t.match(/\b(Active|Inactive)\b/i);
+        return m ? m[1] : '';
+    }
+    function fbFindAdText(card) {
+        const pre = card.querySelector('[style*="white-space: pre-wrap"]');
+        if (pre) { const t = textOf(pre); if (t) return t; }
+        const nodes = Array.from(card.querySelectorAll('div[role="button"],span[role="button"],div,span')).filter(n => fbVisible(n));
+        let best = '';
+        for (const n of nodes) {
+            const t = textOf(n);
+            if (!t || t.length < 40 || t.length > 5000) continue;
+            if (/^(Library ID|Platforms|See ad details|See summary details|Open Dropdown|Sponsored|EU transparency|About this ad|Why am I seeing this ad|Report ad|Shop now)$/i.test(t)) continue;
+            if (t.length > best.length) best = t;
+        }
+        return best;
+    }
+    function fbFindRunning(card) {
+        const lines = String(card.innerText || '').split(/\r?\n/).map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean);
+        for (const line of lines) {
+            const m = line.match(/^Started running(?: on)?\s*(.+)$/i);
+            if (m) return m[1];
+        }
+        const mon = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*';
+        const d1 = new RegExp('\\b' + mon + '\\s+\\d{1,2},\\s+\\d{4}(?:\\s*[-–—]\\s*' + mon + '\\s+\\d{1,2},\\s+\\d{4})?\\b', 'i');
+        for (const line of lines) {
+            if (/Library ID/i.test(line)) continue;
+            if (d1.test(line) && line.length <= 200) return line;
+        }
+        return '';
+    }
+    function fbSplitRunning(r) {
+        r = (r || '').trim();
+        let total = '', main = r;
+        const parts = r.split('·').map(s => s.trim()).filter(Boolean);
+        if (parts.length) {
+            main = parts[0] || '';
+            for (let i = 1; i < parts.length; i++) {
+                if (/total active time/i.test(parts[i])) total = parts[i].replace(/.*total active time\s*/i, '').trim();
+            }
+        }
+        const d = main.split(/[-–—]/).map(s => s.trim()).filter(Boolean);
+        return { start: d[0] || '', end: d[1] || d[0] || '', total, raw: r };
+    }
+    function fbFindVideo(card) {
+        const v = card.querySelector('video');
+        if (!v) return { videoUrl: '', thumb: '' };
+        let src = v.currentSrc || v.src || '';
+        if (!src) {
+            const s = v.querySelector('source');
+            src = (s && (s.src || s.getAttribute('src'))) || '';
+        }
+        src = absUrl(fbUnwrap(src));
+        const poster = fbImgOf({ src: v.poster || v.getAttribute('poster') || '', currentSrc: '', getAttribute: a => v.getAttribute(a) });
+        return { videoUrl: src, thumb: poster };
+    }
+    function fbFindCta(card) {
+        const media = card.querySelector('video') || fbLargestImg(card);
+        if (!media) return { adLinkText: '', adLinkUrl: '' };
+        const mr = media.getBoundingClientRect();
+        const mcx = mr.left + mr.width / 2, mcy = mr.top + mr.height / 2;
+        let best = null, bd = Infinity;
+        for (const a of card.querySelectorAll('a[href]')) {
+            let href = fbUnwrap(absUrl(a.getAttribute('href') || a.href || ''));
+            if (!href || FB_CTA_BLOCK_HREF.test(href)) continue;
+            const at = textOf(a);
+            if (FB_CTA_BLOCK_TEXT.test(at)) continue;
+            try {
+                const u = new URL(href);
+                const h = u.hostname.replace(/^www\./, '');
+                if (h === 'facebook.com' || h.endsWith('facebook.com') || h === 'fb.com' || h.endsWith('fb.com') || h === 'instagram.com' || h.endsWith('instagram.com')) continue;
+            } catch (e) { continue; }
+            const ar = a.getBoundingClientRect();
+            if (ar.width < 10 || ar.height < 10) continue;
+            const d = Math.hypot(ar.left + ar.width / 2 - mcx, ar.top + ar.height / 2 - mcy);
+            if (d < bd) { bd = d; best = a; }
+        }
+        if (!best) return { adLinkText: '', adLinkUrl: '' };
+        return { adLinkText: textOf(best), adLinkUrl: fbUnwrap(absUrl(best.getAttribute('href') || best.href || '')) };
+    }
+    function fbFindPlatforms(card) {
+        // Mobile Safari has no hover, so we can only harvest static metadata
+        // exposed via aria-label/title/data-tooltip-content on the icon row.
+        let lab = null;
+        for (const n of card.querySelectorAll('span, div')) {
+            if (textOf(n) === 'Platforms') { lab = n; break; }
+        }
+        if (!lab) return '';
+        const box = lab.parentElement || lab.closest('div');
+        if (!box) return '';
+        const vals = new Set();
+        const push = v => {
+            (v || '').split(',').map(s => s.trim()).forEach(x => { if (FB_PLAT_OK.test(x)) vals.add(x); });
+        };
+        for (const el of box.querySelectorAll('[aria-label],[title],[data-tooltip-content]')) {
+            push(el.getAttribute('aria-label'));
+            push(el.getAttribute('title'));
+            push(el.getAttribute('data-tooltip-content'));
+        }
+        return Array.from(vals).join(', ');
+    }
+
+    // Walk up from every "Library ID" text node to find the smallest
+    // ancestor that contains exactly one Library ID and a media element.
+    function findFbAdCards() {
+        const roots = new Set();
+        const candidates = Array.from(document.querySelectorAll('div, span'))
+            .filter(el => fbVisible(el) && /Library ID/i.test(el.textContent || '') && /\d{6,}/.test(el.textContent || ''));
+        for (const h of candidates) {
+            let cur = h;
+            for (let i = 0; i < 18 && cur && cur !== document.body; i++) {
+                const r = cur.getBoundingClientRect();
+                if (r.width < 240 || r.height < 240 || r.height > 1600) { cur = cur.parentElement; continue; }
+                const txt = cur.innerText || cur.textContent || '';
+                const idMatches = txt.match(/Library ID\s*[:#]?\s*\d{6,}/ig) || [];
+                if (idMatches.length !== 1) { cur = cur.parentElement; continue; }
+                if (fbLargestImg(cur) || cur.querySelector('video')) { roots.add(cur); break; }
+                cur = cur.parentElement;
+            }
+        }
+        return Array.from(roots);
+    }
+
+    function extractFbAd(card) {
+        const rec = baseRecord();
+        rec.libraryId = fbFindLibraryId(card);
+        rec.fbStatus = fbFindStatus(card);
+        const pg = fbPageFromIcon(card);
+        rec.page = pg.page; rec.pageUrl = pg.pageUrl; rec.pageIcon = pg.pageIcon;
+        rec.seller = pg.page; // reuse the "seller" slot for dedupe / display
+        rec.platforms = fbFindPlatforms(card);
+        const run = fbSplitRunning(fbFindRunning(card));
+        rec.startDate = run.start; rec.endDate = run.end; rec.totalActiveTime = run.total;
+        rec.adText = fbFindAdText(card); rec.title = rec.adText.slice(0, 180);
+        const v = fbFindVideo(card);
+        rec.videoUrl = v.videoUrl; rec.videoThumb = v.thumb;
+        const big = fbLargestImg(card);
+        rec.image = v.thumb || (big ? fbImgOf(big) : '');
+        const cta = fbFindCta(card);
+        rec.adLinkText = cta.adLinkText; rec.adLinkUrl = cta.adLinkUrl;
+        rec.itemNumber = rec.libraryId;
+        rec.url = rec.libraryId ? 'https://www.facebook.com/ads/library/?id=' + encodeURIComponent(rec.libraryId) : '';
+        return rec;
+    }
+
+    // ── Facebook post / sponsored post extraction ──────────────────────
+    function fbPostIsSponsored(card) {
+        // FB puts the word "Sponsored" in subtle markup; check the
+        // aria-label path and the visible text of the header region.
+        if (card.querySelector('[aria-label="Sponsored" i]')) return true;
+        const head = card.querySelector('h3, h4, [role="heading"]');
+        const t = textOf(head || card).slice(0, 400);
+        return /\bSponsored\b/.test(t);
+    }
+    function fbPostPoster(card) {
+        // First non-anonymous "strong" inside the header area (poster name).
+        const link = card.querySelector('h3 a, h4 a, [role="heading"] a, a[role="link"][href*="/"]');
+        if (link) return { name: textOf(link), url: fbUnwrap(absUrl(link.getAttribute('href') || link.href || '')) };
+        return { name: '', url: '' };
+    }
+    function fbPostPermalink(card) {
+        // Look for the "<time>" / "min" / "h" / "d" tiny relative-time
+        // link, which is the stable permalink.
+        const t = card.querySelector('a[aria-label][role="link"][href*="/posts/"], a[href*="/posts/"], a[href*="/videos/"], a[href*="/permalink/"], a[href*="/share/"]');
+        if (t) return fbUnwrap(absUrl(t.getAttribute('href') || t.href || ''));
+        // Fallback: any <a> whose text looks like a relative time.
+        for (const a of card.querySelectorAll('a[role="link"]')) {
+            const tx = textOf(a);
+            if (/^(Just now|\d+\s*(m|min|mins|minutes|h|hr|hrs|hours|d|days|w|weeks|y|years?)\b|yesterday)$/i.test(tx)) {
+                return fbUnwrap(absUrl(a.getAttribute('href') || a.href || ''));
+            }
+        }
+        return '';
+    }
+    function fbPostTimestamp(card) {
+        const ab = card.querySelector('a[aria-label][role="link"][href*="/posts/"], a[aria-label][role="link"][href*="/videos/"]');
+        if (ab) return (ab.getAttribute('aria-label') || '').trim();
+        for (const a of card.querySelectorAll('a[role="link"]')) {
+            const tx = textOf(a);
+            if (/^(Just now|\d+\s*(m|min|mins|minutes|h|hr|hrs|hours|d|days|w|weeks|y|years?)\b|yesterday)$/i.test(tx)) return tx;
+        }
+        return '';
+    }
+    function fbPostText(card) {
+        // Main body text is usually inside [data-ad-preview="message"] or a
+        // <div dir="auto"> with lots of text. Pick the longest visible one.
+        const cands = Array.from(card.querySelectorAll('[data-ad-preview="message"], div[dir="auto"], div[data-testid="post_message"], div[role="article"] div[dir="auto"]'))
+            .filter(n => fbVisible(n));
+        let best = '';
+        for (const n of cands) {
+            const t = textOf(n);
+            if (t.length > best.length && t.length < 6000) best = t;
+        }
+        return best;
+    }
+    function fbPostCounts(card) {
+        const t = textOf(card);
+        const out = { reactions: '', comments: '', shares: '' };
+        let m = t.match(/([\d.,]+[KkMm]?)\s+(?:comments?)\b/i);
+        if (m) out.comments = m[1];
+        m = t.match(/([\d.,]+[KkMm]?)\s+(?:shares?)\b/i);
+        if (m) out.shares = m[1];
+        // Reactions are either "N reactions" or the generic "Like" count near a thumb row.
+        m = t.match(/([\d.,]+[KkMm]?)\s+(?:reactions?|likes?)\b/i);
+        if (m) out.reactions = m[1];
+        return out;
+    }
+    function extractFbPost(card) {
+        const rec = baseRecord();
+        const poster = fbPostPoster(card);
+        rec.page = poster.name; rec.pageUrl = poster.url; rec.seller = poster.name;
+        rec.adText = fbPostText(card); rec.title = rec.adText.slice(0, 180);
+        rec.postTime = fbPostTimestamp(card);
+        rec.isSponsored = fbPostIsSponsored(card) ? 'Yes' : '';
+        const perma = fbPostPermalink(card);
+        rec.url = perma;
+        const v = fbFindVideo(card);
+        rec.videoUrl = v.videoUrl; rec.videoThumb = v.thumb;
+        const big = fbLargestImg(card);
+        rec.image = v.thumb || (big ? fbImgOf(big) : '');
+        const cta = fbFindCta(card);
+        rec.adLinkText = cta.adLinkText; rec.adLinkUrl = cta.adLinkUrl;
+        const c = fbPostCounts(card);
+        rec.reactions = c.reactions; rec.comments = c.comments; rec.shares = c.shares;
+        // A post's "id" — use permalink, otherwise a hash of text + poster.
+        rec.itemNumber = perma || (poster.name + '|' + rec.adText.slice(0, 60));
+        return rec;
     }
 
     // ── Keyword language ───────────────────────────────────────────────
@@ -537,7 +894,9 @@
         MODE === 'etsy-search'   ? 'Etsy search' :
         MODE === 'ebay-search'   ? 'eBay search' :
         MODE === 'ebay-store'    ? 'eBay store'  :
-        MODE === 'ebay-research' ? 'eBay research' : MODE;
+        MODE === 'ebay-research' ? 'eBay research' :
+        MODE === 'fb-ads'        ? 'Facebook Ad Library' :
+        MODE === 'fb-posts'      ? 'Facebook feed'   : MODE;
 
     const panel = h('div', { class: 'uec-panel', hidden: true },
         h('div', { class: 'uec-head' },
@@ -732,7 +1091,9 @@
     function ensureCheckboxes() {
         PAG_BOTTOM = findPaginationBottom();
         maybeUpgradeMode();
-        const nodes = document.querySelectorAll(CFG.card);
+        const nodes = CFG.findCards
+            ? CFG.findCards()
+            : Array.from(document.querySelectorAll(CFG.cardSelector || ''));
         nodes.forEach(card => {
             if (!isCardEligible(card)) return;
             if (card.dataset.uecCard) return;
@@ -934,6 +1295,26 @@
                 ['Price', f => f.price], ['Available', f => f.available], ['Sold', f => f.sold],
                 ['Condition', f => f.condition], ['Handling', f => f.handlingTime], ['Returns', f => f.returns],
                 ['Ships From', f => f.country], ['Image', f => imgFor(f)], ['Date', f => today()]
+            ];
+            case 'fb-ads': return [
+                ['Status', f => f.fbStatus], ['Library ID', f => f.libraryId],
+                ['Page', f => f.page], ['Page URL', f => f.pageUrl],
+                ['Platforms', f => f.platforms], ['Start', f => f.startDate],
+                ['End', f => f.endDate], ['Total Active', f => f.totalActiveTime],
+                ['Ad Text', f => (f.adText || '').slice(0, 1000)],
+                ['CTA Text', f => f.adLinkText], ['CTA URL', f => f.adLinkUrl],
+                ['Ad URL', f => f.url], ['Video URL', f => f.videoUrl],
+                ['Image', f => imgFor(f)], ['Date', f => today()]
+            ];
+            case 'fb-posts': return [
+                ['Poster', f => f.page], ['Poster URL', f => f.pageUrl],
+                ['Sponsored', f => f.isSponsored], ['Posted', f => f.postTime],
+                ['Text', f => (f.adText || '').slice(0, 1000)],
+                ['Permalink', f => f.url],
+                ['CTA Text', f => f.adLinkText], ['CTA URL', f => f.adLinkUrl],
+                ['Reactions', f => f.reactions], ['Comments', f => f.comments], ['Shares', f => f.shares],
+                ['Video URL', f => f.videoUrl], ['Image', f => imgFor(f)],
+                ['Date Captured', f => today()]
             ];
             default: return [
                 ['Seller', f => f.seller], ['Owner', f => f.owner], ['Account Age', f => f.accountAge],

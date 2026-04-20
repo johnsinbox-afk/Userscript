@@ -2,7 +2,20 @@
 
 This is the companion Safari Web Extension to the `../etsy-ebay-listing-collector.user.js` userscript.
 
-It does everything the userscript does (overlay, filters, enrichment, copy-table, save-to-sheets) but with a proper **Sign in with Google** flow, a **picker UI** for choosing a Google Sheet and a Drive folder, and no need to edit any configuration in the source.
+It does everything the userscript does plus adds **Facebook Ad Library** and **Facebook feed/posts** capture — with a proper **Sign in with Google** flow, a **picker UI** for choosing a Google Sheet and a Drive folder, and no configuration to edit in source.
+
+## Supported modes (auto-detected)
+
+| Site | URL pattern | Mode |
+| --- | --- | --- |
+| Etsy search / category / shop | `etsy.com/search*`, `etsy.com/c/*`, `etsy.com/market/*`, `etsy.com/shop/*` | `etsy-search` |
+| eBay search | `ebay.com/sch/*`, `ebay.com/b/*` | `ebay-search` |
+| eBay store | `ebay.com/str/*` or `_ssn=…` URLs | `ebay-store` |
+| eBay Seller Hub Research | `ebay.com/sh/research*` | `ebay-research` |
+| Facebook Ad Library | `facebook.com/ads/library/*` | `fb-ads` |
+| Facebook feed / post / sponsored post | any other `facebook.com/*` page | `fb-posts` |
+
+Each mode writes to its own sheet tab (`Etsy`, `eBay Search`, `eBay Store`, `eBay Research`, `Facebook Ads`, `Facebook Posts`) auto-created on first save.
 
 ## Files
 
