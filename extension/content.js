@@ -1431,7 +1431,19 @@
                     (cfg.folder.name || 'folder') + '</b>. <a href="#" id="uec-open-opts">Change</a>';
             }
             const a = document.getElementById('uec-open-opts');
-            if (a) a.addEventListener('click', e => { e.preventDefault(); api.runtime.sendMessage({ type: 'open-options' }); });
+            if (a) a.addEventListener('click', e => {
+                e.preventDefault();
+                // Safari Web Extensions often ignore runtime.openOptionsPage().
+                // Open the options page as a new tab using the extension's
+                // own URL — works in Safari, Chrome, Firefox, Edge.
+                try {
+                    const optsUrl = (api.runtime.getURL ? api.runtime.getURL('ui/options.html') : '');
+                    if (optsUrl) window.open(optsUrl, '_blank');
+                    else api.runtime.sendMessage({ type: 'open-options' });
+                } catch (err) {
+                    api.runtime.sendMessage({ type: 'open-options' });
+                }
+            });
         } catch (e) {
             targetBox.textContent = 'Settings unavailable in this context.';
         }
