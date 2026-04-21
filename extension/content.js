@@ -253,22 +253,19 @@
         return '';
     }
     function getEbaySearchCountry(card) {
-        let el = Array.from(card.querySelectorAll('.su-card-container__attributes__primary .s-card__attribute-row span.su-styled-text.secondary.large'))
-            .find(s => /Located in/i.test(s.textContent || ''));
-        if (el) return textOf(el).replace(/^Located in\s*/i, '').trim();
-        const containers = [card, card.closest('li.s-item'), card.closest('li.s-card')].filter(Boolean);
-        for (const c of containers) {
-            const alt = Array.from(c.querySelectorAll('span, div, p'))
-                .find(n => /Located in\s+/i.test((n.textContent || '').replace(/\s+/g, ' ').trim()) &&
-                           !n.querySelector('span, div, p'));
-            if (alt) {
-                const m = (alt.textContent || '').match(/Located in\s+([^.\n]+?)(?:\s{2,}|$)/i);
-                if (m) return m[1].trim();
-            }
-            const loc = c.querySelector && c.querySelector('.s-item__location, .s-item__itemLocation');
-            if (loc) return textOf(loc).replace(/^from\s+/i, '').trim();
+        // Fast path — specific desktop selector.
+        let el = card.querySelector('.su-card-container__attributes__primary .s-card__attribute-row span.su-styled-text.secondary.large');
+        if (el && /Located in/i.test(el.textContent || '')) {
+            return textOf(el).replace(/^Located in\s*/i, '').trim();
         }
-        return '';
+        // Fast path — mobile / alt dedicated element.
+        const loc = card.querySelector('.s-item__location, .s-item__itemLocation');
+        if (loc) return textOf(loc).replace(/^from\s+/i, '').trim();
+        // Last resort — single string match on the card's text, O(length)
+        // rather than O(node count). Cheap even on crowded cards.
+        const text = (card.innerText || card.textContent || '');
+        const m = text.match(/Located in\s+([^\n.]+?)(?:\s{2,}|$|\n)/i);
+        return m ? m[1].trim() : '';
     }
 
     // ── Exclusion zones ────────────────────────────────────────────────
@@ -1141,24 +1138,33 @@
     function ensureCheckboxes() {
         try { PAG_BOTTOM = findPaginationBottom(); } catch (e) { PAG_BOTTOM = Infinity; }
         maybeUpgradeMode();
+
+        // Pause the observer while we inject our own DOM nodes, otherwise
+        // every checkbox we append triggers another observer tick → feedback
+        // loop that pegs the CPU on pages that mutate constantly (eBay).
+        let wasObserving = false;
+        try {
+            if (window.__uec_obs) { window.__uec_obs.disconnect(); wasObserving = true; }
+        } catch (e) {}
+
         const nodes = CFG.findCards
             ? CFG.findCards()
             : Array.from(document.querySelectorAll(CFG.cardSelector || ''));
         nodes.forEach(card => {
             try {
+                // Skip processed cards fast — do NOT re-examine or re-extract.
+                // If a user ticks one that was extracted before its DOM was
+                // fully ready, the change handler re-runs extract() at click
+                // time (see below), which catches the lazy-loaded data.
+                if (card.dataset.uecCard) return;
                 if (!isCardEligible(card)) return;
-                if (card.dataset.uecCard) {
-                    // If this was marked on a previous pass but extraction
-                    // failed (or the DOM has since filled in), refresh it now.
-                    if (!card._uecData || (!card._uecData.itemNumber && !card._uecData.url && !card._uecData.title)) {
-                        card._uecData = extract(card);
-                    }
-                    return;
-                }
+                // Mark FIRST so any slowness / throw can't make us re-process
+                // this card on the next tick.
+                card.dataset.uecCard = '1';
+
                 if (MODE === 'ebay-research') {
                     decorateResearchRow(card);
                     card._uecData = extract(card);
-                    card.dataset.uecCard = '1';
                     return;
                 }
                 try {
@@ -1192,13 +1198,16 @@
                 });
                 card.appendChild(wrap);
                 if (data.country) card.appendChild(h('div', { class: 'uec-ship-badge' }, data.country));
-                // Mark as processed LAST so partial failures above get retried
-                // on the next MutationObserver tick.
-                card.dataset.uecCard = '1';
             } catch (err) {
                 console.warn('[uec] ensureCheckboxes per-card error:', err, card);
             }
         });
+        // Re-attach observer if we paused it.
+        try {
+            if (wasObserving && window.__uec_obs) {
+                window.__uec_obs.observe(document.body, { childList: true, subtree: true });
+            }
+        } catch (e) {}
         rebuildCountryBox(); applyFilters();
         if (state.autoMode === 'query' && state.query) applyQuerySelection();
         updateCount();
@@ -1524,12 +1533,34 @@
     }
 
     // ── Observer + initial render ─────────────────────────────────────
+    // Debounce mutations aggressively. eBay fires dozens per second (lazy
+    // images, watcher counts, ad refresh) and running the extractor for
+    // each is what hung Safari. We only care about DOM changes that might
+    // have added a new card, so we also filter the mutations cheaply.
     let moTimer = null;
-    const obs = new MutationObserver(() => {
+    const DEBOUNCE_MS = 600;
+    const cardSel = CFG.cardSelector || '';
+    function shouldRescan(mutations) {
+        // If any mutation added nodes and one of them looks like it could
+        // contain a new card, schedule a rescan.
+        for (const m of mutations) {
+            if (m.type !== 'childList') continue;
+            for (const n of m.addedNodes) {
+                if (n.nodeType !== 1) continue;
+                // Ignore nodes we ourselves added (checkbox wraps / badges).
+                if (n.classList && (n.classList.contains('uec-listing-check') || n.classList.contains('uec-ship-badge'))) continue;
+                if (cardSel && (n.matches && n.matches(cardSel) || n.querySelector && n.querySelector(cardSel))) return true;
+                if (CFG.findCards) return true; // FB climb-up path; can't cheaply pre-filter.
+            }
+        }
+        return false;
+    }
+    window.__uec_obs = new MutationObserver(mutations => {
+        if (!shouldRescan(mutations)) return;
         if (moTimer) clearTimeout(moTimer);
-        moTimer = setTimeout(ensureCheckboxes, 200);
+        moTimer = setTimeout(() => { moTimer = null; ensureCheckboxes(); }, DEBOUNCE_MS);
     });
-    obs.observe(document.body, { childList: true, subtree: true });
+    window.__uec_obs.observe(document.body, { childList: true, subtree: true });
     ensureCheckboxes(); updateCount();
 
     // Expose a small debug helper. In Safari's Web Inspector console on
