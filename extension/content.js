@@ -1171,7 +1171,37 @@
                     const cs = getComputedStyle(card);
                     if (cs && cs.position === 'static') card.style.position = 'relative';
                 } catch (e) { /* detached node during re-render */ }
-                const data = extract(card);
+                let data = extract(card) || baseRecord();
+                // Safety net: if the mode-specific extractor returned a bare
+                // record, fill in what we can from the DOM directly. This
+                // guarantees a selection always has at least an itemNumber
+                // and a URL on eBay/Etsy, no matter what MODE detection did.
+                if (isEbay || isEtsy) {
+                    if (!data.itemNumber) {
+                        const li = card.closest && card.closest('li[data-listingid]');
+                        if (li) data.itemNumber = li.getAttribute('data-listingid') || '';
+                    }
+                    if (!data.url) {
+                        const a = card.querySelector('a[href*="/itm/"]') || card.querySelector('a[href*="/listing/"]');
+                        if (a && a.href) data.url = cleanUrl(a.href);
+                    }
+                    if (!data.itemNumber && data.url) {
+                        const m = data.url.match(/\/(?:itm|listing)\/(\d+)/);
+                        if (m) data.itemNumber = m[1];
+                    }
+                    if (!data.title) {
+                        const t = card.querySelector('.s-card__title, .v2-listing-card h3, .v2-listing-card h2');
+                        if (t) data.title = textOf(t);
+                    }
+                    if (!data.image) {
+                        const img = card.querySelector('img.s-card__image, img[srcset], img[src]');
+                        if (img) data.image = normalizeImgSrc(img);
+                    }
+                    if (!data.price) {
+                        const p = card.querySelector('.s-card__price, .currency-value');
+                        if (p) data.price = textOf(p);
+                    }
+                }
                 card._uecData = data;
                 const input = h('input', { type: 'checkbox' });
                 let persistedId = keyFor(data);
