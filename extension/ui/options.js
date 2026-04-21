@@ -11,9 +11,45 @@ const $ = sel => document.querySelector(sel);
 function setText(sel, t) { const el = $(sel); if (el) el.textContent = t; }
 
 async function init() {
-    const redir = await rpc({ type: 'redirect-uri' });
-    setText('#redirect-uri', redir.uri || '(unavailable in this browser)');
-    $('#copy-redirect').addEventListener('click', () => navigator.clipboard.writeText(redir.uri || ''));
+    // Try to discover the extension's redirect URI from multiple sources —
+    // Safari is inconsistent about which one works:
+    //   1. api.identity.getRedirectURL() called from the options page itself
+    //   2. the background worker's redirect-uri RPC (what we did before)
+    //   3. fallback: derive from location.origin (works in Safari Web
+    //      Extensions, where options pages live on safari-web-extension://…)
+    let redirectUri = '';
+    try {
+        if (api.identity && typeof api.identity.getRedirectURL === 'function') {
+            redirectUri = api.identity.getRedirectURL() || '';
+        }
+    } catch (e) {}
+    if (!redirectUri) {
+        const rpcResp = await rpc({ type: 'redirect-uri' });
+        if (rpcResp && rpcResp.uri) redirectUri = rpcResp.uri;
+    }
+    if (!redirectUri && location.origin && /^safari-web-extension:\/\//i.test(location.origin)) {
+        // Safari exposes the extension origin as e.g.
+        //   safari-web-extension://ABC1234…
+        // The matching Google-accepted redirect URI is the same host on
+        // https://<uuid>.safari-web-extension.com/. We derive it here.
+        const m = location.origin.match(/^safari-web-extension:\/\/([^/]+)/i);
+        if (m) redirectUri = `https://${m[1]}.safari-web-extension.com/`;
+    }
+    if (redirectUri) {
+        setText('#redirect-uri', redirectUri);
+    } else {
+        // Last-resort: let the user paste it in manually.
+        const el = $('#redirect-uri');
+        if (el) {
+            el.innerHTML = '<input id="redirect-uri-manual" type="text" placeholder="Click Sign-in below — the error page Google shows will include the redirect URI; paste it here" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;">';
+        }
+    }
+    $('#copy-redirect').addEventListener('click', () => {
+        const toCopy = document.getElementById('redirect-uri-manual')
+            ? document.getElementById('redirect-uri-manual').value
+            : redirectUri;
+        if (toCopy) navigator.clipboard.writeText(toCopy);
+    });
 
     const stored = await new Promise(r => api.storage.local.get(['oauthClientId','signedIn','user','sheet','folder'], r));
     if (stored.oauthClientId) $('#client-id').value = stored.oauthClientId;
