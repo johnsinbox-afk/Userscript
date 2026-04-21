@@ -95,46 +95,39 @@ async function init() {
     if (stored.signedIn) { loadSheets(); loadFolders(); }
 }
 
-// Options-page OAuth driver. Asks the background worker for the auth URL,
-// opens it in a popup window, polls the popup until its URL starts with
-// the redirect URI (which carries #access_token=…), then hands the hash
-// to the worker to persist.
+// Options-page OAuth driver. Uses browser.identity.launchWebAuthFlow from
+// THIS page (not the background worker) so that Safari's internal
+// interception of the magic https://<uuid>.safari-web-extension.com/
+// redirect URI works — that address is not a real DNS host, it's only
+// recognized inside the identity API.
 async function signInFromOptionsPage() {
     const resp = await rpc({ type: 'auth-url' });
     if (!resp.ok) { alert('Cannot build auth URL: ' + (resp.message || '(no message)')); return; }
-    const authUrl = resp.url;
+    const authUrl  = resp.url;
     const redirect = resp.redirect || '';
-    if (!redirect) { alert("Extension couldn't determine its redirect URI. Paste the URL shown in Safari's address bar into chat and we'll compute it manually."); return; }
-    const popup = window.open(authUrl, 'uec_oauth', 'width=520,height=640,menubar=no,toolbar=no,location=yes,status=no');
-    if (!popup) { alert('Popup blocked. Allow popups for this page and try again.'); return; }
-    const tStart = Date.now();
-    const poll = setInterval(async () => {
-        try {
-            if (!popup || popup.closed) {
-                clearInterval(poll);
-                alert('Sign-in window was closed before completing.');
-                return;
-            }
-            // Reading location.href throws for cross-origin URLs (Google),
-            // and succeeds only once the popup has navigated to our
-            // extension-owned redirect URI. That's our signal.
-            let href;
-            try { href = popup.location.href; } catch (e) { href = ''; }
-            if (href && href.indexOf(redirect) === 0) {
-                clearInterval(poll);
-                const full = href;
-                try { popup.close(); } catch (e) {}
-                const saved = await rpc({ type: 'save-redirect', redirected: full });
-                if (!saved.ok) { alert('Sign-in failed: ' + (saved.message || '')); return; }
-                const s = await new Promise(rr => api.storage.local.get(null, rr));
-                renderUser(s);
-                loadSheets(); loadFolders();
-            } else if (Date.now() - tStart > 5 * 60 * 1000) {
-                clearInterval(poll);
-                alert('Sign-in timed out after 5 minutes.');
-            }
-        } catch (e) { /* keep polling */ }
-    }, 500);
+    if (!api.identity || typeof api.identity.launchWebAuthFlow !== 'function') {
+        alert("This browser doesn't expose chrome.identity.launchWebAuthFlow from extension pages, so the sign-in can't complete here. Paste a screenshot of Safari's address bar from the options page into chat and we'll work around it.");
+        return;
+    }
+    let redirected;
+    try {
+        redirected = await new Promise((resolve, reject) => {
+            api.identity.launchWebAuthFlow({ url: authUrl, interactive: true }, (r) => {
+                if (api.runtime && api.runtime.lastError) return reject(new Error(api.runtime.lastError.message || 'launchWebAuthFlow error'));
+                if (!r) return reject(new Error('Sign-in cancelled or no redirect returned.'));
+                resolve(r);
+            });
+        });
+    } catch (e) {
+        alert('Sign-in failed: ' + (e && e.message ? e.message : e) +
+              (redirect ? '\n\nMake sure this exact URL is listed under Authorized redirect URIs in Google Cloud Credentials:\n\n' + redirect : ''));
+        return;
+    }
+    const saved = await rpc({ type: 'save-redirect', redirected });
+    if (!saved.ok) { alert('Sign-in failed while saving token: ' + (saved.message || '')); return; }
+    const s = await new Promise(rr => api.storage.local.get(null, rr));
+    renderUser(s);
+    loadSheets(); loadFolders();
 }
 
 function renderUser(s) {
