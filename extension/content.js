@@ -7,6 +7,23 @@
 (function () {
     'use strict';
 
+    // ── Single-instance guard ──────────────────────────────────────────
+    // Safari re-runs content scripts on back/forward cache restore and on
+    // some SPA transitions, creating duplicate toggle buttons + panels
+    // with the same IDs. Tear down any previous instance on this page and
+    // leave a flag so we never double-inject in one page lifetime.
+    try {
+        document.querySelectorAll('.uec-toggle, .uec-panel, #uec-toast').forEach(n => n.remove());
+        document.querySelectorAll('[data-uec-card]').forEach(c => {
+            try {
+                const old = c.querySelector('.uec-listing-check, .uec-ship-badge, .uec-research-label');
+                if (old) { c.querySelectorAll('.uec-listing-check, .uec-ship-badge, .uec-research-label').forEach(x => x.remove()); }
+                delete c.dataset.uecCard;
+            } catch (e) {}
+        });
+        if (window.__uec_obs) { try { window.__uec_obs.disconnect(); } catch (e) {} window.__uec_obs = null; }
+    } catch (e) {}
+
     // ── Cross-browser shim ─────────────────────────────────────────────
     const api = (typeof browser !== 'undefined' ? browser : chrome);
 
@@ -965,6 +982,9 @@
             statusEl, logEl
         )
     );
+    // Last-ditch cleanup right before inserting, in case something added
+    // another toggle between our top-of-file sweep and now.
+    document.querySelectorAll('.uec-toggle, .uec-panel').forEach(n => n.remove());
     document.documentElement.appendChild(toggleBtn);
     document.documentElement.appendChild(panel);
     function togglePanel(force) {
@@ -1003,7 +1023,12 @@
 
     function log(msg, cls)   { logEl.appendChild(h('div', { class: cls || '' }, '\u2022 ' + msg)); logEl.scrollTop = logEl.scrollHeight; }
     function setStatus(s)    { statusEl.textContent = s; }
-    function updateCount()   { document.getElementById('uec-count').textContent = String(state.selectedIds.size); }
+    function updateCount() {
+        const n = String(state.selectedIds.size);
+        // Update every badge on the page — covers the rare case where an
+        // older instance's badge is still hanging around somewhere.
+        document.querySelectorAll('#uec-count, .uec-count').forEach(el => { el.textContent = n; });
+    }
     function trunc(s)        { return (s || '').length > 60 ? s.slice(0, 57) + '\u2026' : s; }
 
     function rebuildCountryBox() {
