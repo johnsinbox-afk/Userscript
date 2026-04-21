@@ -106,26 +106,47 @@ function getClientId() {
     });
 }
 function redirectUri() {
-    // launchWebAuthFlow redirects back to a per-extension URL under the
-    // browser's redirect domain; works identically in Safari Web
-    // Extensions, Chrome, Firefox (with manifest v3) and Edge.
-    try { return api.identity.getRedirectURL(); } catch (e) { return ''; }
+    // Safari's identity.getRedirectURL() is unreliable. Derive the URI
+    // from the extension's own origin instead:
+    //   safari-web-extension://<uuid>/  →  https://<uuid>.safari-web-extension.com/
+    //   chrome-extension://<id>/        →  https://<id>.chromiumapp.org/
+    try {
+        if (api.identity && typeof api.identity.getRedirectURL === 'function') {
+            const u = api.identity.getRedirectURL();
+            if (u) return u;
+        }
+    } catch (e) {}
+    try {
+        const base = api.runtime.getURL('');
+        let m = base.match(/^safari-web-extension:\/\/([^/]+)/i);
+        if (m) return `https://${m[1]}.safari-web-extension.com/`;
+        m = base.match(/^chrome-extension:\/\/([^/]+)/i);
+        if (m) return `https://${m[1]}.chromiumapp.org/`;
+        m = base.match(/^moz-extension:\/\/([^/]+)/i);
+        if (m) return `https://${m[1]}.extensions.allizom.org/`;
+    } catch (e) {}
+    return '';
 }
 
+function buildAuthUrl(clientId) {
+    return 'https://accounts.google.com/o/oauth2/v2/auth' +
+        '?client_id=' + encodeURIComponent(clientId) +
+        '&redirect_uri=' + encodeURIComponent(redirectUri()) +
+        '&response_type=token' +
+        '&scope=' + encodeURIComponent(OAUTH_SCOPES) +
+        '&include_granted_scopes=true' +
+        '&prompt=consent';
+}
 function startSignIn() {
     return new Promise(async (resolve, reject) => {
         const clientId = await getClientId();
         if (!clientId || clientId.startsWith('YOUR_OAUTH')) {
             return reject(new Error('OAuth client ID is not configured. Open Settings → paste your Google OAuth client ID.'));
         }
-        const url = 'https://accounts.google.com/o/oauth2/v2/auth' +
-            '?client_id=' + encodeURIComponent(clientId) +
-            '&redirect_uri=' + encodeURIComponent(redirectUri()) +
-            '&response_type=token' +
-            '&scope=' + encodeURIComponent(OAUTH_SCOPES) +
-            '&include_granted_scopes=true' +
-            '&prompt=consent';
-        api.identity.launchWebAuthFlow({ url, interactive: true }, redirected => {
+        if (!api.identity || typeof api.identity.launchWebAuthFlow !== 'function') {
+            return reject(new Error('identity.launchWebAuthFlow not available; use the options-page sign-in instead.'));
+        }
+        api.identity.launchWebAuthFlow({ url: buildAuthUrl(clientId), interactive: true }, redirected => {
             if (api.runtime.lastError || !redirected) {
                 return reject(new Error((api.runtime.lastError && api.runtime.lastError.message) || 'Sign-in cancelled.'));
             }
@@ -141,6 +162,19 @@ function startSignIn() {
             });
         });
     });
+}
+// Used by the options page for a popup-based sign-in that doesn't depend
+// on the background worker staying alive.
+async function saveTokenFromRedirect(redirected) {
+    const m = /[#&?]access_token=([^&]+)/.exec(redirected || '');
+    const exp = /[#&?]expires_in=(\d+)/.exec(redirected || '');
+    if (!m) throw new Error('No access token in redirect.');
+    const token = decodeURIComponent(m[1]);
+    const expiresAt = Date.now() + ((exp ? parseInt(exp[1], 10) : 3600) - 60) * 1000;
+    await new Promise(r => api.storage.local.set({ token, expiresAt, signedIn: true }, r));
+    const who = await fetchMe(token).catch(() => null);
+    if (who) await new Promise(r => api.storage.local.set({ user: who }, r));
+    return { token, user: who };
 }
 function signOut() {
     return new Promise(resolve => {
@@ -462,6 +496,19 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 }
                 case 'redirect-uri': {
                     sendResponse({ ok: true, uri: redirectUri() });
+                    return;
+                }
+                case 'auth-url': {
+                    const clientId = await getClientId();
+                    if (!clientId || clientId.startsWith('YOUR_OAUTH')) return sendResponse({ ok: false, message: 'OAuth client ID not set.' });
+                    sendResponse({ ok: true, url: buildAuthUrl(clientId), redirect: redirectUri() });
+                    return;
+                }
+                case 'save-redirect': {
+                    try {
+                        const r = await saveTokenFromRedirect(msg.redirected);
+                        sendResponse({ ok: true, user: r.user });
+                    } catch (e) { sendResponse({ ok: false, message: e.message || String(e) }); }
                     return;
                 }
                 default:

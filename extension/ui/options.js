@@ -61,13 +61,7 @@ async function init() {
         await rpc({ type: 'set-client-id', clientId: v });
         alert('Saved.');
     });
-    $('#signin').addEventListener('click', async () => {
-        const r = await rpc({ type: 'sign-in' });
-        if (!r.ok) { alert('Sign-in failed: ' + (r.message || '')); return; }
-        const s = await new Promise(rr => api.storage.local.get(null, rr));
-        renderUser(s);
-        loadSheets(); loadFolders();
-    });
+    $('#signin').addEventListener('click', signInFromOptionsPage);
     $('#signout').addEventListener('click', async () => {
         await rpc({ type: 'sign-out' });
         const s = await new Promise(rr => api.storage.local.get(null, rr));
@@ -99,6 +93,48 @@ async function init() {
     $('#test-btn').addEventListener('click', runTest);
 
     if (stored.signedIn) { loadSheets(); loadFolders(); }
+}
+
+// Options-page OAuth driver. Asks the background worker for the auth URL,
+// opens it in a popup window, polls the popup until its URL starts with
+// the redirect URI (which carries #access_token=…), then hands the hash
+// to the worker to persist.
+async function signInFromOptionsPage() {
+    const resp = await rpc({ type: 'auth-url' });
+    if (!resp.ok) { alert('Cannot build auth URL: ' + (resp.message || '(no message)')); return; }
+    const authUrl = resp.url;
+    const redirect = resp.redirect || '';
+    if (!redirect) { alert("Extension couldn't determine its redirect URI. Paste the URL shown in Safari's address bar into chat and we'll compute it manually."); return; }
+    const popup = window.open(authUrl, 'uec_oauth', 'width=520,height=640,menubar=no,toolbar=no,location=yes,status=no');
+    if (!popup) { alert('Popup blocked. Allow popups for this page and try again.'); return; }
+    const tStart = Date.now();
+    const poll = setInterval(async () => {
+        try {
+            if (!popup || popup.closed) {
+                clearInterval(poll);
+                alert('Sign-in window was closed before completing.');
+                return;
+            }
+            // Reading location.href throws for cross-origin URLs (Google),
+            // and succeeds only once the popup has navigated to our
+            // extension-owned redirect URI. That's our signal.
+            let href;
+            try { href = popup.location.href; } catch (e) { href = ''; }
+            if (href && href.indexOf(redirect) === 0) {
+                clearInterval(poll);
+                const full = href;
+                try { popup.close(); } catch (e) {}
+                const saved = await rpc({ type: 'save-redirect', redirected: full });
+                if (!saved.ok) { alert('Sign-in failed: ' + (saved.message || '')); return; }
+                const s = await new Promise(rr => api.storage.local.get(null, rr));
+                renderUser(s);
+                loadSheets(); loadFolders();
+            } else if (Date.now() - tStart > 5 * 60 * 1000) {
+                clearInterval(poll);
+                alert('Sign-in timed out after 5 minutes.');
+            }
+        } catch (e) { /* keep polling */ }
+    }, 500);
 }
 
 function renderUser(s) {
