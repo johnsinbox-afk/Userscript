@@ -207,8 +207,9 @@ if (api.storage && api.storage.onChanged) {
 }
 
 function renderUser(s) {
-    if (s.signedIn && s.user) {
-        setText('#who', 'Signed in as ' + (s.user.email || s.user.name || '(unknown)'));
+    if (s.signedIn) {
+        const who = (s.user && (s.user.email || s.user.name)) || '(email unavailable)';
+        setText('#who', 'Signed in as ' + who);
         $('#signin').hidden = true;
         $('#signout').hidden = false;
     } else {
