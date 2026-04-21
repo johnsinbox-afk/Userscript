@@ -1,0 +1,78 @@
+{
+  "manifest_version": 3,
+  "name": "Listing Collector",
+  "version": "1.0.0",
+  "description": "Tick listings on Etsy and eBay, enrich with item-page details, and save to Google Sheets with Drive-hosted images.",
+
+  "permissions": [
+    "storage",
+    "identity",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.etsy.com/*",
+    "https://*.etsy.com/*",
+    "https://www.ebay.com/*",
+    "https://*.ebay.com/*",
+    "https://www.facebook.com/*",
+    "https://*.facebook.com/*",
+    "https://*.fbcdn.net/*",
+    "https://sheets.googleapis.com/*",
+    "https://www.googleapis.com/*",
+    "https://oauth2.googleapis.com/*",
+    "https://accounts.google.com/*"
+  ],
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.etsy.com/*search*",
+        "https://www.etsy.com/search*",
+        "https://www.etsy.com/c/*",
+        "https://www.etsy.com/market/*",
+        "https://www.etsy.com/shop/*",
+        "https://*.etsy.com/*search*",
+        "https://www.ebay.com/sch/*",
+        "https://*.ebay.com/sch/*",
+        "https://www.ebay.com/b/*",
+        "https://www.ebay.com/str/*",
+        "https://*.ebay.com/str/*",
+        "https://www.ebay.com/sh/research*",
+        "https://www.ebay.com/sh/research/*",
+        "https://www.facebook.com/*",
+        "https://*.facebook.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_title": "Listing Collector",
+    "default_popup": "ui/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+
+  "options_ui": {
+    "page": "ui/options.html"
+  },
+
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}

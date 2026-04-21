@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Listing Collector — Settings</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="ui.css">
+</head>
+<body>
+<main class="wrap">
+    <header>
+        <h1>Listing Collector</h1>
+        <p class="sub">Save Etsy & eBay listings into a Google Sheet with images hosted in your Drive.</p>
+    </header>
+
+    <section class="card" id="step-clientid">
+        <h2>1. Google OAuth Client ID</h2>
+        <p>One-time setup. See the <a href="../docs/SAFARI_SETUP.md" target="_blank">setup guide</a> for click-by-click instructions. Paste the "Client ID" from your Google Cloud OAuth credentials below.</p>
+        <p class="hint">Redirect URI to add in Google Cloud: <code id="redirect-uri">loading…</code> <button class="tiny" id="copy-redirect">Copy</button></p>
+        <div class="row">
+            <input id="client-id" type="text" placeholder="xxxxxxxxxxx.apps.googleusercontent.com">
+            <button id="save-client-id" class="primary">Save</button>
+        </div>
+    </section>
+
+    <section class="card" id="step-signin">
+        <h2>2. Sign in to Google</h2>
+        <div class="row" id="signin-row">
+            <button id="signin" class="primary">Sign in with Google</button>
+            <span id="who" class="muted"></span>
+            <button id="signout" class="danger" hidden>Sign out</button>
+        </div>
+    </section>
+
+    <section class="card" id="step-target">
+        <h2>3. Target Spreadsheet & Drive Folder</h2>
+
+        <div class="picker">
+            <h3>Spreadsheet</h3>
+            <p class="hint">Pick one of your Google Sheets, or create a fresh one.</p>
+            <div class="row">
+                <input id="sheet-filter" type="text" placeholder="Filter…">
+                <button id="sheet-reload">Reload</button>
+                <button id="sheet-create">+ New sheet</button>
+            </div>
+            <ul id="sheet-list" class="list"></ul>
+            <div class="current">Selected: <b id="cur-sheet">none</b></div>
+        </div>
+
+        <div class="picker">
+            <h3>Drive folder for images</h3>
+            <p class="hint">Listings' main images will be uploaded here so the Sheet's =IMAGE() never breaks.</p>
+            <div class="row">
+                <input id="folder-filter" type="text" placeholder="Filter…">
+                <button id="folder-reload">Reload</button>
+                <button id="folder-create">+ New folder</button>
+            </div>
+            <ul id="folder-list" class="list"></ul>
+            <div class="current">Selected: <b id="cur-folder">none</b></div>
+        </div>
+    </section>
+
+    <section class="card">
+        <h2>4. Test</h2>
+        <p>Writes a dummy row to verify sign-in, Sheet access, and Drive upload are working.</p>
+        <button id="test-btn" class="primary">Run test</button>
+        <pre id="test-out" class="log"></pre>
+    </section>
+</main>
+<script src="options.js" type="module"></script>
+</body>
+</html>
