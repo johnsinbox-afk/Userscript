@@ -144,46 +144,46 @@ async function signInFromOptionsPage() {
 }
 
 async function manualSignInFlow(authUrl, redirect) {
-    const instr = [
-        'Safari did not allow the one-click sign-in from this page.',
-        '',
-        'Manual sign-in (takes ~30 seconds):',
-        '',
-        '1. A new tab is about to open at Google. Sign in & approve the app.',
-        '2. You will then be redirected to a page that says',
-        '   "Safari Can\'t Find the Server" — that\'s expected.',
-        '3. COPY the entire URL from Safari\'s address bar on that error page.',
-        '4. Come back to this tab and paste the URL into the box that appears,',
-        '   then click Save.',
-        '',
-        'Ready?'
-    ].join('\n');
-    if (!window.confirm(instr)) return;
-
-    // Open the OAuth URL in a new tab so Safari won't block it.
-    const win = window.open(authUrl, '_blank');
-    if (!win) { alert('Popup blocked. Try again, and when prompted allow popups for this page.'); return; }
-
-    // Render a paste-the-URL form in place of the sign-in section.
+    // We can't window.open() here because Safari's popup blocker fires
+    // unless the click is DIRECTLY on a real anchor. So we render a plain
+    // <a> that the user clicks manually, then instruct them how to paste
+    // the result URL back.
     const host = document.getElementById('step-signin') || document.body;
     let form = document.getElementById('uec-manual-signin');
     if (form) form.remove();
     form = document.createElement('div');
     form.id = 'uec-manual-signin';
-    form.style.cssText = 'margin-top:12px;padding:10px;border:1px dashed var(--border);border-radius:8px;';
+    form.style.cssText = 'margin-top:12px;padding:12px 14px;border:2px dashed #1f7ae0;border-radius:10px;background:rgba(31,122,224,0.05);';
     form.innerHTML = `
-        <div class="hint">Paste the full URL from the "Safari Can't Find the Server" page here, then click Save.</div>
+        <div style="font-weight:600;margin-bottom:6px;">Manual sign-in</div>
+        <ol style="margin:0 0 10px 18px;padding:0;font-size:13px;line-height:1.6;">
+            <li>Click <b>Open Google sign-in</b> below. A new tab opens — sign in &amp; approve.</li>
+            <li>You will land on a page that says <b>"Safari Can't Find the Server"</b>. That's expected.</li>
+            <li>Select and copy the <b>entire URL</b> from Safari's address bar on that error page (starts with <code>https://</code>, ends with <code>scope=…</code>).</li>
+            <li>Come back to this tab and paste it into the box below, then click <b>Save token</b>.</li>
+        </ol>
         <div class="row">
-            <input id="uec-manual-url" type="text" placeholder="https://...safari-web-extension.com/#access_token=...">
+            <a id="uec-manual-open" class="primary" href="${authUrl}" target="_blank" rel="noopener"
+                style="display:inline-block;text-decoration:none;padding:8px 12px;border-radius:8px;background:#1f7ae0;color:#fff;font-weight:600;">
+                Open Google sign-in
+            </a>
+        </div>
+        <div class="row" style="margin-top:10px;">
+            <input id="uec-manual-url" type="text" placeholder="Paste the URL from the &ldquo;Safari Can't Find the Server&rdquo; page here">
             <button id="uec-manual-save" class="primary">Save token</button>
         </div>
         <div id="uec-manual-status" class="muted" style="margin-top:6px;"></div>
     `;
     host.appendChild(form);
+
     document.getElementById('uec-manual-save').addEventListener('click', async () => {
         const redirected = (document.getElementById('uec-manual-url').value || '').trim();
-        if (!redirected) return;
         const statusEl = document.getElementById('uec-manual-status');
+        if (!redirected) { statusEl.textContent = 'Paste the URL first.'; return; }
+        if (redirected.indexOf('access_token=') < 0) {
+            statusEl.textContent = 'That URL does not contain an access token. Make sure you copied the full URL from the "Safari Can\'t Find the Server" page, not the Google sign-in page.';
+            return;
+        }
         statusEl.textContent = 'Saving token…';
         const saved = await rpc({ type: 'save-redirect', redirected });
         if (!saved.ok) { statusEl.textContent = 'Error: ' + (saved.message || ''); return; }
