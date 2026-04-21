@@ -3,7 +3,6 @@
   "name": "Listing Collector",
   "version": "1.0.0",
   "description": "Tick listings on Etsy and eBay, enrich with item-page details, and save to Google Sheets with Drive-hosted images.",
-  "default_locale": "en",
 
   "permissions": [
     "storage",
