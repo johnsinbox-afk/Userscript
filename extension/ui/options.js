@@ -106,7 +106,12 @@ async function signInFromOptionsPage() {
     const authUrl  = resp.url;
     const redirect = resp.redirect || '';
     if (!api.identity || typeof api.identity.launchWebAuthFlow !== 'function') {
-        alert("This browser doesn't expose chrome.identity.launchWebAuthFlow from extension pages, so the sign-in can't complete here. Paste a screenshot of Safari's address bar from the options page into chat and we'll work around it.");
+        // Fallback path for Safari Web Extensions where launchWebAuthFlow
+        // isn't exposed: open Google's consent URL in a new tab, let the
+        // user complete sign-in, and have them paste the resulting
+        // "Safari Can't Find the Server" URL back here. That URL contains
+        // the #access_token=… fragment we need.
+        await manualSignInFlow(authUrl, redirect);
         return;
     }
     let redirected;
@@ -136,6 +141,60 @@ async function signInFromOptionsPage() {
     }
     renderUser(s);
     loadSheets(); loadFolders();
+}
+
+async function manualSignInFlow(authUrl, redirect) {
+    const instr = [
+        'Safari did not allow the one-click sign-in from this page.',
+        '',
+        'Manual sign-in (takes ~30 seconds):',
+        '',
+        '1. A new tab is about to open at Google. Sign in & approve the app.',
+        '2. You will then be redirected to a page that says',
+        '   "Safari Can\'t Find the Server" — that\'s expected.',
+        '3. COPY the entire URL from Safari\'s address bar on that error page.',
+        '4. Come back to this tab and paste the URL into the box that appears,',
+        '   then click Save.',
+        '',
+        'Ready?'
+    ].join('\n');
+    if (!window.confirm(instr)) return;
+
+    // Open the OAuth URL in a new tab so Safari won't block it.
+    const win = window.open(authUrl, '_blank');
+    if (!win) { alert('Popup blocked. Try again, and when prompted allow popups for this page.'); return; }
+
+    // Render a paste-the-URL form in place of the sign-in section.
+    const host = document.getElementById('step-signin') || document.body;
+    let form = document.getElementById('uec-manual-signin');
+    if (form) form.remove();
+    form = document.createElement('div');
+    form.id = 'uec-manual-signin';
+    form.style.cssText = 'margin-top:12px;padding:10px;border:1px dashed var(--border);border-radius:8px;';
+    form.innerHTML = `
+        <div class="hint">Paste the full URL from the "Safari Can't Find the Server" page here, then click Save.</div>
+        <div class="row">
+            <input id="uec-manual-url" type="text" placeholder="https://...safari-web-extension.com/#access_token=...">
+            <button id="uec-manual-save" class="primary">Save token</button>
+        </div>
+        <div id="uec-manual-status" class="muted" style="margin-top:6px;"></div>
+    `;
+    host.appendChild(form);
+    document.getElementById('uec-manual-save').addEventListener('click', async () => {
+        const redirected = (document.getElementById('uec-manual-url').value || '').trim();
+        if (!redirected) return;
+        const statusEl = document.getElementById('uec-manual-status');
+        statusEl.textContent = 'Saving token…';
+        const saved = await rpc({ type: 'save-redirect', redirected });
+        if (!saved.ok) { statusEl.textContent = 'Error: ' + (saved.message || ''); return; }
+        statusEl.textContent = 'Signed in. Refreshing…';
+        await new Promise(r => setTimeout(r, 200));
+        const s = await new Promise(rr => api.storage.local.get(null, rr));
+        if (!s.signedIn && saved.user) { s.signedIn = true; s.user = saved.user; }
+        renderUser(s);
+        loadSheets(); loadFolders();
+        form.remove();
+    });
 }
 
 // Also re-render the user line whenever storage changes — covers the

@@ -1203,6 +1203,15 @@
                     }
                 }
                 card._uecData = data;
+                // Mirror key fields into DOM attributes so the page-world
+                // Console can inspect them. (Safari's content-script world
+                // is isolated from the page; direct JS properties like
+                // _uecData are invisible to devtools.)
+                try {
+                    if (data.itemNumber) card.setAttribute('data-uec-item', data.itemNumber);
+                    if (data.title)      card.setAttribute('data-uec-title', (data.title || '').slice(0, 80));
+                    if (data.url)        card.setAttribute('data-uec-url',   (data.url || '').slice(0, 120));
+                } catch (e) {}
                 const input = h('input', { type: 'checkbox' });
                 let persistedId = keyFor(data);
                 if (state.selectedIds.has(persistedId)) input.checked = true;
