@@ -125,9 +125,26 @@ async function signInFromOptionsPage() {
     }
     const saved = await rpc({ type: 'save-redirect', redirected });
     if (!saved.ok) { alert('Sign-in failed while saving token: ' + (saved.message || '')); return; }
+    // Small delay so storage.local.set() has flushed before we re-read.
+    await new Promise(r => setTimeout(r, 150));
     const s = await new Promise(rr => api.storage.local.get(null, rr));
+    // Fallback: if storage somehow hasn't caught up yet, trust the
+    // background's reply.user as the source of truth.
+    if (!s.signedIn && saved.user) {
+        s.signedIn = true;
+        s.user = saved.user;
+    }
     renderUser(s);
     loadSheets(); loadFolders();
+}
+
+// Also re-render the user line whenever storage changes — covers the
+// case where the token was saved out-of-band (e.g. via Web Inspector).
+if (api.storage && api.storage.onChanged) {
+    api.storage.onChanged.addListener(async () => {
+        const s = await new Promise(r => api.storage.local.get(null, r));
+        renderUser(s);
+    });
 }
 
 function renderUser(s) {
