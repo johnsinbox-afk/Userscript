@@ -448,13 +448,18 @@
         return rec;
     }
     function extract(card) {
-        switch (MODE) {
-            case 'etsy-search':   return extractEtsy(card);
-            case 'ebay-search':   return extractEbaySearch(card);
-            case 'ebay-store':    return extractEbayStore(card);
-            case 'ebay-research': return extractEbayResearch(card);
-            case 'fb-ads':        return extractFbAd(card);
-            case 'fb-posts':      return extractFbPost(card);
+        try {
+            switch (MODE) {
+                case 'etsy-search':   return extractEtsy(card)        || baseRecord();
+                case 'ebay-search':   return extractEbaySearch(card)  || baseRecord();
+                case 'ebay-store':    return extractEbayStore(card)   || baseRecord();
+                case 'ebay-research': return extractEbayResearch(card)|| baseRecord();
+                case 'fb-ads':        return extractFbAd(card)        || baseRecord();
+                case 'fb-posts':      return extractFbPost(card)      || baseRecord();
+            }
+        } catch (e) {
+            // Never let one misbehaving card kill the whole pipeline.
+            console.warn('[uec] extract threw:', e, card);
         }
         return baseRecord();
     }
@@ -1113,49 +1118,65 @@
     }
 
     function ensureCheckboxes() {
-        PAG_BOTTOM = findPaginationBottom();
+        try { PAG_BOTTOM = findPaginationBottom(); } catch (e) { PAG_BOTTOM = Infinity; }
         maybeUpgradeMode();
         const nodes = CFG.findCards
             ? CFG.findCards()
             : Array.from(document.querySelectorAll(CFG.cardSelector || ''));
         nodes.forEach(card => {
-            if (!isCardEligible(card)) return;
-            if (card.dataset.uecCard) return;
-            if (MODE === 'ebay-research') {
-                decorateResearchRow(card);
+            try {
+                if (!isCardEligible(card)) return;
+                if (card.dataset.uecCard) {
+                    // If this was marked on a previous pass but extraction
+                    // failed (or the DOM has since filled in), refresh it now.
+                    if (!card._uecData || (!card._uecData.itemNumber && !card._uecData.url && !card._uecData.title)) {
+                        card._uecData = extract(card);
+                    }
+                    return;
+                }
+                if (MODE === 'ebay-research') {
+                    decorateResearchRow(card);
+                    card._uecData = extract(card);
+                    card.dataset.uecCard = '1';
+                    return;
+                }
+                try {
+                    const cs = getComputedStyle(card);
+                    if (cs && cs.position === 'static') card.style.position = 'relative';
+                } catch (e) { /* detached node during re-render */ }
+                const data = extract(card);
+                card._uecData = data;
+                const input = h('input', { type: 'checkbox' });
+                let persistedId = keyFor(data);
+                if (state.selectedIds.has(persistedId)) input.checked = true;
+                input.addEventListener('click', e => e.stopPropagation());
+                input.addEventListener('change', () => {
+                    try {
+                        if (input.checked) {
+                            const fresh = extract(card); card._uecData = fresh;
+                            persistedId = rememberSelection(keyFor(fresh), fresh);
+                        } else {
+                            forgetSelection(persistedId);
+                        }
+                        state.autoMode = 'manual'; saveState(); updateCount();
+                    } catch (e) { console.warn('[uec] change handler threw:', e); }
+                });
+                const wrap = h('div', { class: 'uec-listing-check', title: data.title || '' }, input);
+                wrap.addEventListener('click', e => {
+                    if (e.target === wrap) {
+                        e.preventDefault(); e.stopPropagation();
+                        input.checked = !input.checked;
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                });
+                card.appendChild(wrap);
+                if (data.country) card.appendChild(h('div', { class: 'uec-ship-badge' }, data.country));
+                // Mark as processed LAST so partial failures above get retried
+                // on the next MutationObserver tick.
                 card.dataset.uecCard = '1';
-                card._uecData = extract(card);
-                return;
+            } catch (err) {
+                console.warn('[uec] ensureCheckboxes per-card error:', err, card);
             }
-            const cs = getComputedStyle(card);
-            if (cs.position === 'static') card.style.position = 'relative';
-            card.dataset.uecCard = '1';
-            const data = extract(card);
-            card._uecData = data;
-            const input = h('input', { type: 'checkbox' });
-            let persistedId = keyFor(data);
-            if (state.selectedIds.has(persistedId)) input.checked = true;
-            input.addEventListener('click', e => e.stopPropagation());
-            input.addEventListener('change', () => {
-                if (input.checked) {
-                    // Re-extract in case the DOM filled in after first render.
-                    const fresh = extract(card); card._uecData = fresh;
-                    persistedId = rememberSelection(keyFor(fresh), fresh);
-                } else {
-                    forgetSelection(persistedId);
-                }
-                state.autoMode = 'manual'; saveState(); updateCount();
-            });
-            const wrap = h('div', { class: 'uec-listing-check', title: data.title }, input);
-            wrap.addEventListener('click', e => {
-                if (e.target === wrap) {
-                    e.preventDefault(); e.stopPropagation();
-                    input.checked = !input.checked;
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            });
-            card.appendChild(wrap);
-            if (data.country) card.appendChild(h('div', { class: 'uec-ship-badge' }, data.country));
         });
         rebuildCountryBox(); applyFilters();
         if (state.autoMode === 'query' && state.query) applyQuerySelection();
