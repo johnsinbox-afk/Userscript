@@ -386,10 +386,24 @@
         if (liWithId) rec.itemNumber = (liWithId.getAttribute('data-listingid') || '').trim();
         if (!/^\d{6,}$/.test(rec.itemNumber)) rec.itemNumber = '';
         if (!rec.itemNumber) { const m = (rec.url || '').match(/\/itm\/(\d+)/); if (m) rec.itemNumber = m[1]; }
+        // Fallback to scanning the entire card's text for "Item: NNNNNN".
+        // eBay's class names shift every few months so we can't rely on a
+        // specific selector.
         if (!rec.itemNumber) {
-            const txt = textOf(Array.from(card.querySelectorAll('.su-card-container__attributes__secondary .s-card__attribute-row span.su-styled-text.secondary.large'))
-                .find(s => /Item\s*:/.test(s.textContent || '')) || null);
-            const m = txt.match(/Item\s*:\s*(\d+)/i); if (m) rec.itemNumber = m[1];
+            const m = (card.innerText || card.textContent || '').match(/Item\s*[:#]?\s*(\d{6,})/i);
+            if (m) rec.itemNumber = m[1];
+        }
+        // Final fallback: `listingId` / `itemId` / `data-view` attributes
+        // anywhere in the card. Matches any 9-15 digit number.
+        if (!rec.itemNumber) {
+            const attrs = ['data-listingid', 'data-itemid', 'data-view', 'data-testid'];
+            outer: for (const node of card.querySelectorAll('[data-listingid],[data-itemid],[data-view],[data-testid]')) {
+                for (const a of attrs) {
+                    const v = node.getAttribute(a) || '';
+                    const m = v.match(/(\d{9,15})/);
+                    if (m) { rec.itemNumber = m[1]; break outer; }
+                }
+            }
         }
         rec.country = getEbaySearchCountry(card);
         return rec;
@@ -853,11 +867,18 @@
             cache: o.cache, autoMode: o.autoMode
         };
     })();
+    // If we can't extract a stable key from the card, synthesize one so we
+    // never silently drop a selection (previously the counter stuck at 0).
+    let __synthCounter = 0;
+    function keyFor(data) {
+        return (data && (data.itemNumber || data.url || data.libraryId)) || ('uec-synth-' + (++__synthCounter) + '-' + Date.now());
+    }
     function rememberSelection(id, data) {
-        if (!id) return;
+        if (!id) id = keyFor(data);
         state.selectedIds.add(id);
-        state.cache[id] = Object.assign({ __savedAt: Date.now() }, data);
+        state.cache[id] = Object.assign({ __savedAt: Date.now() }, data || {});
         saveState();
+        return id;
     }
     function forgetSelection(id) {
         if (!id) return;
@@ -1034,11 +1055,14 @@
         const input = h('input', { type: 'checkbox' });
         if (itemNumber && state.selectedIds.has(itemNumber)) input.checked = true;
         input.addEventListener('click', e => e.stopPropagation());
+        let persistedId = itemNumber || '';
         input.addEventListener('change', () => {
             row._uecData = extract(row);
-            const id = row._uecData.itemNumber || row._uecData.url || '';
-            if (input.checked) rememberSelection(id, row._uecData);
-            else               forgetSelection(id);
+            if (input.checked) {
+                persistedId = rememberSelection(keyFor(row._uecData), row._uecData);
+            } else {
+                forgetSelection(persistedId);
+            }
             updateCount();
         });
         const wrap = h('div', { class: 'uec-listing-check', title: 'Select' }, input);
@@ -1109,13 +1133,17 @@
             const data = extract(card);
             card._uecData = data;
             const input = h('input', { type: 'checkbox' });
-            const key = data.itemNumber || data.url || '';
-            if (key && state.selectedIds.has(key)) input.checked = true;
+            let persistedId = keyFor(data);
+            if (state.selectedIds.has(persistedId)) input.checked = true;
             input.addEventListener('click', e => e.stopPropagation());
             input.addEventListener('change', () => {
-                const id = data.itemNumber || data.url || '';
-                if (input.checked) rememberSelection(id, data);
-                else               forgetSelection(id);
+                if (input.checked) {
+                    // Re-extract in case the DOM filled in after first render.
+                    const fresh = extract(card); card._uecData = fresh;
+                    persistedId = rememberSelection(keyFor(fresh), fresh);
+                } else {
+                    forgetSelection(persistedId);
+                }
                 state.autoMode = 'manual'; saveState(); updateCount();
             });
             const wrap = h('div', { class: 'uec-listing-check', title: data.title }, input);
@@ -1461,4 +1489,28 @@
     });
     obs.observe(document.body, { childList: true, subtree: true });
     ensureCheckboxes(); updateCount();
+
+    // Expose a small debug helper. In Safari's Web Inspector console on
+    // the eBay/Etsy tab, run:   __uec_debug()
+    // to see what the extractor is getting for every card — helpful when
+    // counters misbehave.
+    window.__uec_debug = function () {
+        const rows = Array.from(document.querySelectorAll('[data-uec-card]')).map(c => {
+            const d = c._uecData || {};
+            return {
+                mode: MODE,
+                itemNumber: d.itemNumber || '(none)',
+                url: (d.url || '').slice(0, 80),
+                title: (d.title || '').slice(0, 60),
+                seller: d.seller || '',
+                country: d.country || '',
+                hasImage: !!d.image,
+                checked: !!(c.querySelector('.uec-listing-check input') && c.querySelector('.uec-listing-check input').checked)
+            };
+        });
+        console.table(rows);
+        console.log('state.selectedIds:', Array.from(state.selectedIds));
+        console.log('state.cache keys:', Object.keys(state.cache));
+        return rows;
+    };
 })();
