@@ -326,6 +326,19 @@
         if (isUnderExcludedHeading(card)) return false;
         if (isInCarouselOrSrpAnswer(card)) return false;
         if (isEtsy && !isEtsyCardInScope(card)) return false;
+        // Skip eBay's hidden "Shop on eBay" template stub that sits at the
+        // top of every search page. It has title "Shop on eBay", a
+        // placeholder ebaystatic.com PNG, and a dummy /itm/123456 href.
+        if (isEbay) {
+            try {
+                const t = (card.textContent || '').trim();
+                if (/^Shop on eBay/i.test(t.slice(0, 30))) return false;
+                const a = card.querySelector('a[href*="/itm/123456"]');
+                if (a) return false;
+                const img = card.querySelector('img');
+                if (img && /ebaystatic\.com\//.test(img.currentSrc || img.src || '')) return false;
+            } catch (e) {}
+        }
         return true;
     }
 
