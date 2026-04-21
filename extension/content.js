@@ -326,17 +326,21 @@
         if (isUnderExcludedHeading(card)) return false;
         if (isInCarouselOrSrpAnswer(card)) return false;
         if (isEtsy && !isEtsyCardInScope(card)) return false;
-        // Skip eBay's hidden "Shop on eBay" template stub that sits at the
-        // top of every search page. It has title "Shop on eBay", a
-        // placeholder ebaystatic.com PNG, and a dummy /itm/123456 href.
+        // Skip eBay's filler cards inserted amongst the real results:
+        //   - "Shop on eBay" template stub (sometimes appears twice) — fake
+        //     image + dummy /itm/123456 href.
+        //   - "Find more like this / See all similar items" recommendation
+        //     tile — no listing of its own, just a link cluster.
         if (isEbay) {
             try {
                 const t = (card.textContent || '').trim();
                 if (/^Shop on eBay/i.test(t.slice(0, 30))) return false;
+                if (/^Find more like this/i.test(t.slice(0, 30))) return false;
+                if (/See all similar items/i.test(t.slice(0, 80)) && !card.querySelector('.s-card__price')) return false;
                 const a = card.querySelector('a[href*="/itm/123456"]');
                 if (a) return false;
                 const img = card.querySelector('img');
-                if (img && /ebaystatic\.com\//.test(img.currentSrc || img.src || '')) return false;
+                if (img && /ebaystatic\.com\/.*\/[a-z0-9]{10,}\.png/i.test(img.currentSrc || img.src || '')) return false;
             } catch (e) {}
         }
         return true;
@@ -460,19 +464,23 @@
         if (!rec.seller && prev && prev.classList && prev.classList.contains('policyViolationMessageRow')) rec.seller = 'Policy Violation';
         return rec;
     }
+    // Counter so we log at most 3 exceptions total — enough to diagnose,
+    // not enough to flood.
+    let __extractErrLogged = 0;
     function extract(card) {
         try {
             switch (MODE) {
-                case 'etsy-search':   return extractEtsy(card)        || baseRecord();
-                case 'ebay-search':   return extractEbaySearch(card)  || baseRecord();
-                case 'ebay-store':    return extractEbayStore(card)   || baseRecord();
-                case 'ebay-research': return extractEbayResearch(card)|| baseRecord();
-                case 'fb-ads':        return extractFbAd(card)        || baseRecord();
-                case 'fb-posts':      return extractFbPost(card)      || baseRecord();
+                case 'etsy-search':   return extractEtsy(card)         || baseRecord();
+                case 'ebay-search':   return extractEbaySearch(card)   || baseRecord();
+                case 'ebay-store':    return extractEbayStore(card)    || baseRecord();
+                case 'ebay-research': return extractEbayResearch(card) || baseRecord();
+                case 'fb-ads':        return extractFbAd(card)         || baseRecord();
+                case 'fb-posts':      return extractFbPost(card)       || baseRecord();
             }
         } catch (e) {
-            // Never let one misbehaving card kill the whole pipeline.
-            console.warn('[uec] extract threw:', e, card);
+            if (__extractErrLogged++ < 3) {
+                console.error('[uec] extract threw on card (showing first 3 only):', e && e.stack || e, card);
+            }
         }
         return baseRecord();
     }
