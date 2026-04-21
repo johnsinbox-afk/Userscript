@@ -1228,13 +1228,25 @@
                     } catch (e) { console.warn('[uec] change handler threw:', e); }
                 });
                 const wrap = h('div', { class: 'uec-listing-check', title: data.title || '' }, input);
-                wrap.addEventListener('click', e => {
-                    if (e.target === wrap) {
-                        e.preventDefault(); e.stopPropagation();
+                // Any click on the wrap (or its padding / background) toggles
+                // the checkbox. Stop propagation so the card's own link
+                // doesn't navigate us to the listing.
+                const toggleFromWrap = (e) => {
+                    // The native checkbox click goes through first; if that
+                    // was the source, don't flip again (would undo the tick).
+                    if (e.target !== input) {
+                        e.preventDefault();
                         input.checked = !input.checked;
-                        input.dispatchEvent(new Event('change', { bubbles: true }));
                     }
-                });
+                    e.stopPropagation();
+                    // Always notify our handler — even on direct input click,
+                    // to be robust against any browser that doesn't fire
+                    // 'change' reliably inside a MutationObserver world.
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                };
+                wrap.addEventListener('click',     toggleFromWrap, true);
+                wrap.addEventListener('touchend',  toggleFromWrap, true);
+                wrap.addEventListener('mousedown', e => e.stopPropagation(), true);
                 card.appendChild(wrap);
                 if (data.country) card.appendChild(h('div', { class: 'uec-ship-badge' }, data.country));
             } catch (err) {
