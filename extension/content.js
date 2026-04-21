@@ -1215,9 +1215,13 @@
                 const input = h('input', { type: 'checkbox' });
                 let persistedId = keyFor(data);
                 if (state.selectedIds.has(persistedId)) input.checked = true;
-                input.addEventListener('click', e => e.stopPropagation());
-                input.addEventListener('change', () => {
+                // Handle selection state on change. Native click flow:
+                //   click → default action toggles `checked` → fires 'change'.
+                // So at this point input.checked is already the NEW value.
+                const onChange = () => {
                     try {
+                        window.__uec_changeCalls = (window.__uec_changeCalls || 0) + 1;
+                        document.documentElement.setAttribute('data-uec-change-calls', String(window.__uec_changeCalls));
                         if (input.checked) {
                             const fresh = extract(card); card._uecData = fresh;
                             persistedId = rememberSelection(keyFor(fresh), fresh);
@@ -1225,28 +1229,36 @@
                             forgetSelection(persistedId);
                         }
                         state.autoMode = 'manual'; saveState(); updateCount();
-                    } catch (e) { console.warn('[uec] change handler threw:', e); }
-                });
-                const wrap = h('div', { class: 'uec-listing-check', title: data.title || '' }, input);
-                // Any click on the wrap (or its padding / background) toggles
-                // the checkbox. Stop propagation so the card's own link
-                // doesn't navigate us to the listing.
-                const toggleFromWrap = (e) => {
-                    // The native checkbox click goes through first; if that
-                    // was the source, don't flip again (would undo the tick).
-                    if (e.target !== input) {
-                        e.preventDefault();
-                        input.checked = !input.checked;
-                    }
-                    e.stopPropagation();
-                    // Always notify our handler — even on direct input click,
-                    // to be robust against any browser that doesn't fire
-                    // 'change' reliably inside a MutationObserver world.
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                        document.documentElement.setAttribute('data-uec-selected-count', String(state.selectedIds.size));
+                    } catch (err) { console.warn('[uec] change handler threw:', err); }
                 };
-                wrap.addEventListener('click',     toggleFromWrap, true);
-                wrap.addEventListener('touchend',  toggleFromWrap, true);
-                wrap.addEventListener('mousedown', e => e.stopPropagation(), true);
+                input.addEventListener('change', onChange);
+                // Belt-and-braces: if some odd browser path doesn't fire
+                // change reliably, a short poll catches state drift.
+                input.addEventListener('click', () => setTimeout(() => {
+                    const want = input.checked;
+                    const have = state.selectedIds.has(persistedId);
+                    if (want !== have) onChange();
+                }, 50));
+                // Only thing we care about on click: don't let it bubble
+                // up to any <a> wrapping the card (which would navigate).
+                // We do this on the bubble phase (capture=false), AFTER
+                // the default action has already toggled the checkbox.
+                const stopBubble = e => e.stopPropagation();
+                input.addEventListener('click',     stopBubble);
+                input.addEventListener('mousedown', stopBubble);
+
+                const wrap = h('div', { class: 'uec-listing-check', title: data.title || '' }, input);
+                // Clicks on the wrap background (padding around the input)
+                // should also toggle the checkbox. Do the whole dance via
+                // input.click(), which triggers the native default +
+                // native change event — no custom event dispatch.
+                wrap.addEventListener('click', e => {
+                    if (e.target !== input) {
+                        e.stopPropagation();
+                        input.click();
+                    }
+                });
                 card.appendChild(wrap);
                 if (data.country) card.appendChild(h('div', { class: 'uec-ship-badge' }, data.country));
             } catch (err) {
